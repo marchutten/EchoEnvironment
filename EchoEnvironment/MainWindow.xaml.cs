@@ -35,8 +35,7 @@ namespace EchoEnvironment
         private readonly Model3DGroup _mapGroup = new();
         private readonly GeometryModel3D[] _mapModels = new GeometryModel3D[MapBuckets];
         private long _lastMapRender;
-        private readonly Model3DGroup _axesGroup = new();
-        private readonly ScaleTransform3D _axesScale = new(1, 1, 1);
+        private readonly GeometryModel3D _gridModel = CreateGridModel(4.0, 0.5);
 
         private static int IndexOfNewline(System.Text.StringBuilder sb)
         {
@@ -69,8 +68,6 @@ namespace EchoEnvironment
             root.Children.Add(_points);
             // Added last: WPF blends transparent models over what was drawn before, so it must not come first.
             root.Children.Add(CreateReferenceSphere(4.0));
-            AddAxes(_axesGroup, 1.0, 0.01);
-            _axesGroup.Transform = new Transform3DGroup { Children = { _axesScale, CreateViewTransform(true) } };
             SensorVisual.Content = root;
 
             var boardRoot = new Model3DGroup();
@@ -137,10 +134,6 @@ namespace EchoEnvironment
                 _camDistance * Math.Cos(pitch) * Math.Sin(yaw),
                 _camDistance * Math.Sin(pitch),
                 _camDistance * Math.Cos(pitch) * Math.Cos(yaw));
-            double axesScale = _camDistance * 0.25;
-            _axesScale.ScaleX = axesScale;
-            _axesScale.ScaleY = axesScale;
-            _axesScale.ScaleZ = axesScale;
             Camera.Position = new Point3D(position.X, position.Y, position.Z);
             Camera.LookDirection = -position;
         }
@@ -481,13 +474,13 @@ namespace EchoEnvironment
             }
         }
 
-        private void ShowAxes_Click(object sender, RoutedEventArgs e)
+        private void ShowGrid_Click(object sender, RoutedEventArgs e)
         {
             var root = (Model3DGroup)SensorVisual.Content;
-            root.Children.Remove(_axesGroup);
-            if (ShowAxesCheckBox.IsChecked == true)
+            root.Children.Remove(_gridModel);
+            if (ShowGridCheckBox.IsChecked == true)
             {
-                root.Children.Add(_axesGroup);
+                root.Children.Add(_gridModel);
             }
         }
 
@@ -645,6 +638,38 @@ namespace EchoEnvironment
             return group;
         }
 
+		// Horizontal raster at z = 0 (WPF Y = 0), fixed in the world so it stays visible at any zoom.
+		private static GeometryModel3D CreateGridModel(double extent, double spacing)
+		{
+			const double half = 0.003;
+			var mesh = new MeshGeometry3D();
+			int lines = (int)Math.Round(extent / spacing);
+
+			void AddFlatQuad(double x0, double z0, double x1, double z1)
+			{
+				int i = mesh.Positions.Count;
+				mesh.Positions.Add(new Point3D(x0, 0, z0));
+				mesh.Positions.Add(new Point3D(x1, 0, z0));
+				mesh.Positions.Add(new Point3D(x1, 0, z1));
+				mesh.Positions.Add(new Point3D(x0, 0, z1));
+				foreach (int t in new[] { 0, 1, 2, 0, 2, 3 })
+				{
+					mesh.TriangleIndices.Add(i + t);
+				}
+			}
+
+			for (int n = -lines; n <= lines; n++)
+			{
+				double c = n * spacing;
+				AddFlatQuad(c - half, -extent, c + half, extent);
+				AddFlatQuad(-extent, c - half, extent, c + half);
+			}
+
+			var material = new EmissiveMaterial(new SolidColorBrush(Color.FromRgb(90, 110, 130)));
+			var model = new GeometryModel3D(mesh, material) { BackMaterial = material };
+			model.Freeze();
+			return model;
+		}
         private static GeometryModel3D CreateLineModel()
         {
             var material = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(200, 200, 200)));
