@@ -1,71 +1,29 @@
-# Prerequisites
-*.d
+# Build output
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userprefs
+*.rsuser
+*.DotSettings.user
 
-# Precompiled Headers
-*.gch
-*.pch
+# Tests
+TestResults/
+*.trx
+*.coverage
 
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# Build directories
-[Bb]uild/
-[Bb]uild-*/
-cmake-build-*/
-
-# CMake generated files
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
+# Packages
+*.nupkg
+*.snupkg
+packages/
 
 # Temporary files
 *.tmp
 *.log
 *.bak
 *.swp
-
-# vcpkg
-vcpkg_installed/
-
-# debug information files
-*.dwo
-
-# test output & cache
-Testing/
-.cache/
-/EchoEnvironment/bin/Debug/net10.0-windows
-/EchoEnvironment/obj
-/.vs
