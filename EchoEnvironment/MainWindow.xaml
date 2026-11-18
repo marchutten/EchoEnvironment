@@ -10,6 +10,7 @@
             <TextBlock Text="Baud:" VerticalAlignment="Center" Margin="8,0,4,0"/>
             <TextBox x:Name="BaudTextBox" Text="115200" Width="70" VerticalContentAlignment="Center"/>
             <Button x:Name="ConnectButton" Content="Connect" Margin="8,0" Padding="12,0" Click="Connect_Click"/>
+            <CheckBox x:Name="ShowAxesCheckBox" Content="Show axes" VerticalAlignment="Center" Margin="0,0,8,0" Click="ShowAxes_Click"/>
             <CheckBox x:Name="KeepMapCheckBox" Content="Keep map" VerticalAlignment="Center" Margin="0,0,8,0" Click="KeepMap_Click"/>
             <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="8,0"/>
         </StackPanel>

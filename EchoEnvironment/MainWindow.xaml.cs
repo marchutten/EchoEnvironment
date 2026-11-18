@@ -15,7 +15,7 @@ namespace EchoEnvironment
         private const double FieldOfViewDegrees = 45.0;
         private const double MaxDistanceMm = 4000.0;
         private const double MinDistanceMm = 20.0;
-        private const double LineHalfWidth = 0.003;
+        private const double LineHalfWidth = 0.0005;
         private const double SceneUnitsPerMm = 1.0 / 1000.0;
 
         private readonly Model3DGroup _boardGroup = new();
@@ -35,6 +35,8 @@ namespace EchoEnvironment
         private readonly Model3DGroup _mapGroup = new();
         private readonly GeometryModel3D[] _mapModels = new GeometryModel3D[MapBuckets];
         private long _lastMapRender;
+        private readonly Model3DGroup _axesGroup = new();
+        private readonly ScaleTransform3D _axesScale = new(1, 1, 1);
 
         private static int IndexOfNewline(System.Text.StringBuilder sb)
         {
@@ -67,6 +69,8 @@ namespace EchoEnvironment
             root.Children.Add(_points);
             // Added last: WPF blends transparent models over what was drawn before, so it must not come first.
             root.Children.Add(CreateReferenceSphere(4.0));
+            AddAxes(_axesGroup, 1.0, 0.003);
+            _axesGroup.Transform = new Transform3DGroup { Children = { _axesScale, CreateViewTransform(true) } };
             SensorVisual.Content = root;
 
             var boardRoot = new Model3DGroup();
@@ -133,6 +137,10 @@ namespace EchoEnvironment
                 _camDistance * Math.Cos(pitch) * Math.Sin(yaw),
                 _camDistance * Math.Sin(pitch),
                 _camDistance * Math.Cos(pitch) * Math.Cos(yaw));
+            double axesScale = _camDistance * 0.25;
+            _axesScale.ScaleX = axesScale;
+            _axesScale.ScaleY = axesScale;
+            _axesScale.ScaleZ = axesScale;
             Camera.Position = new Point3D(position.X, position.Y, position.Z);
             Camera.LookDirection = -position;
         }
@@ -465,6 +473,16 @@ namespace EchoEnvironment
             {
                 meshes[b].Freeze();
                 _mapModels[b].Geometry = meshes[b];
+            }
+        }
+
+        private void ShowAxes_Click(object sender, RoutedEventArgs e)
+        {
+            var root = (Model3DGroup)SensorVisual.Content;
+            root.Children.Remove(_axesGroup);
+            if (ShowAxesCheckBox.IsChecked == true)
+            {
+                root.Children.Add(_axesGroup);
             }
         }
 
