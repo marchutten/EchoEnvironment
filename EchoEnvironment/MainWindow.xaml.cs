@@ -27,6 +27,7 @@ namespace EchoEnvironment
         private readonly MeshGeometry3D _cubeMesh = CreateCubeMesh(0.02);
         private readonly GeometryModel3D _lineModel = CreateLineModel();
         private readonly System.Text.StringBuilder _rxBuffer = new();
+        private const string DefaultPort = "COM12";
         private SerialPort? _port;
         private int _frames;
 
@@ -204,7 +205,7 @@ namespace EchoEnvironment
             string selected = PortComboBox.Text;
             PortComboBox.ItemsSource = SerialPort.GetPortNames().Order().ToList();
             PortComboBox.Text = string.IsNullOrWhiteSpace(selected)
-                ? (PortComboBox.Items.Count > 0 ? PortComboBox.Items[0]?.ToString() : string.Empty)
+                ? (PortComboBox.Items.Contains(DefaultPort) ? DefaultPort : PortComboBox.Items.Count > 0 ? PortComboBox.Items[0]?.ToString() : DefaultPort)
                 : selected;
         }
 
@@ -468,11 +469,11 @@ namespace EchoEnvironment
         {
             double h = length / 2;
             group.Children.Add(CreateColoredBox(new Point3D(h, 0, 0), length, width, width, Colors.Red));
-            group.Children.Add(CreateColoredBox(new Point3D(0, h, 0), width, length, width, Colors.LimeGreen));
             group.Children.Add(CreateColoredBox(new Point3D(0, 0, -h), width, width, length, Colors.DeepSkyBlue));
+            group.Children.Add(CreateColoredBox(new Point3D(0, h, 0), width, length, width, Colors.LimeGreen));
             group.Children.Add(CreateAxisLabel("X", new Point3D(length + 0.08, 0, 0), Colors.Red));
-            group.Children.Add(CreateAxisLabel("Y", new Point3D(0, length + 0.08, 0), Colors.LimeGreen));
-            group.Children.Add(CreateAxisLabel("Z", new Point3D(0, 0, -(length + 0.08)), Colors.DeepSkyBlue));
+            group.Children.Add(CreateAxisLabel("Y", new Point3D(0, 0, -(length + 0.08)), Colors.DeepSkyBlue));
+            group.Children.Add(CreateAxisLabel("Z", new Point3D(0, length + 0.08, 0), Colors.LimeGreen));
         }
 
         private static GeometryModel3D CreateAxisLabel(string text, Point3D center, Color color)
