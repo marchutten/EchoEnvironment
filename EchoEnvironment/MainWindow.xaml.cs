@@ -58,7 +58,7 @@ namespace EchoEnvironment
 
             var boardRoot = new Model3DGroup();
             boardRoot.Children.Add(CreateWorldAxes());
-            _boardGroup.Transform = new Transform3DGroup { Children = { new MatrixTransform3D(new Matrix3D(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)), _orientation } };
+            _boardGroup.Transform = new Transform3DGroup { Children = { new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), 90)), new MatrixTransform3D(new Matrix3D(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)), _orientation } };
             _boardGroup.Children.Add(CreateBoardModel());
             AddAxes(_boardGroup, 0.5, 0.01);
             boardRoot.Children.Add(_boardGroup);
