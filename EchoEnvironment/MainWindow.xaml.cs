@@ -50,7 +50,7 @@ namespace EchoEnvironment
 
             var root = new Model3DGroup();
             root.Children.Add(CreateSensorMarker());
-            _points.Transform = _orientation;
+            _points.Transform = CreateViewTransform();
             root.Children.Add(_points);
             // Added last: WPF blends transparent models over what was drawn before, so it must not come first.
             root.Children.Add(CreateReferenceSphere(4.0));
@@ -58,7 +58,7 @@ namespace EchoEnvironment
 
             var boardRoot = new Model3DGroup();
             boardRoot.Children.Add(CreateWorldAxes());
-            _boardGroup.Transform = new Transform3DGroup { Children = { new MatrixTransform3D(new Matrix3D(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)), _orientation, new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), 90)) } };
+            _boardGroup.Transform = CreateViewTransform();
             _boardGroup.Children.Add(CreateBoardModel());
             AddAxes(_boardGroup, 0.5, 0.01);
             boardRoot.Children.Add(_boardGroup);
@@ -88,6 +88,16 @@ namespace EchoEnvironment
             double roll = Math.Atan2(rotation.M12, rotation.M22) * 180.0 / Math.PI;
             OrientationText.Text = $"Orientation\nHeading: {heading,6:0.0}°\nPitch:   {roll,6:0.0}°\nRoll:    {pitch,6:0.0}°";
         }
+
+        private Transform3DGroup CreateViewTransform() => new()
+        {
+            Children =
+            {
+                new MatrixTransform3D(new Matrix3D(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)),
+                _orientation,
+                new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), 90))
+            }
+        };
 
         private double _camYaw = 20;
         private double _camPitch = 20;
