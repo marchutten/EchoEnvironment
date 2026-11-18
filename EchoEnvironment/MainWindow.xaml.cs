@@ -181,6 +181,10 @@ namespace EchoEnvironment
                 case System.Windows.Input.Key.Space:
                     _viewRotation = Quaternion.Identity;
                     SensorVisual.Transform = Transform3D.Identity;
+                    _camYaw = 20;
+                    _camPitch = 20;
+                    _camDistance = 5;
+                    UpdateCamera();
                     e.Handled = true;
                     return;
                 case System.Windows.Input.Key.X:
@@ -206,6 +210,7 @@ namespace EchoEnvironment
         private void View_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             _dragging = true;
+            Focus();
             _lastMouse = e.GetPosition(ViewBorder);
             ViewBorder.CaptureMouse();
         }
