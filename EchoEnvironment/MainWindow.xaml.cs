@@ -35,7 +35,7 @@ namespace EchoEnvironment
         private readonly Model3DGroup _mapGroup = new();
         private readonly GeometryModel3D[] _mapModels = new GeometryModel3D[MapBuckets];
         private long _lastMapRender;
-        private readonly GeometryModel3D _gridModel = CreateGridModel(4.0, 0.5);
+        private readonly GeometryModel3D _gridModel = CreateGridModel(3.98, 0.5);
 
         private static int IndexOfNewline(System.Text.StringBuilder sb)
         {
@@ -480,7 +480,7 @@ namespace EchoEnvironment
             root.Children.Remove(_gridModel);
             if (ShowGridCheckBox.IsChecked == true)
             {
-                root.Children.Add(_gridModel);
+                root.Children.Insert(root.Children.Count - 1, _gridModel);
             }
         }
 
@@ -661,8 +661,9 @@ namespace EchoEnvironment
 			for (int n = -lines; n <= lines; n++)
 			{
 				double c = n * spacing;
-				AddFlatQuad(c - half, -extent, c + half, extent);
-				AddFlatQuad(-extent, c - half, extent, c + half);
+				double w = Math.Sqrt(extent * extent - c * c);
+				AddFlatQuad(c - half, -w, c + half, w);
+				AddFlatQuad(-w, c - half, w, c + half);
 			}
 
 			var material = new EmissiveMaterial(new SolidColorBrush(Color.FromRgb(90, 110, 130)));
