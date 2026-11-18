@@ -30,6 +30,11 @@ namespace EchoEnvironment
         private const string DefaultPort = "COM12";
         private SerialPort? _port;
         private int _frames;
+        private const int MapBuckets = 16;
+        private readonly Dictionary<int, (Point3D Position, int Bucket)> _map = [];
+        private readonly Model3DGroup _mapGroup = new();
+        private readonly GeometryModel3D[] _mapModels = new GeometryModel3D[MapBuckets];
+        private long _lastMapRender;
 
         private static int IndexOfNewline(System.Text.StringBuilder sb)
         {
@@ -51,6 +56,14 @@ namespace EchoEnvironment
             var root = new Model3DGroup();
             root.Children.Add(CreateSensorMarker());
             _points.Transform = CreateViewTransform(false);
+            for (int b = 0; b < MapBuckets; b++)
+            {
+                var material = new DiffuseMaterial(new SolidColorBrush(DistanceColor(b * MaxDistanceMm / (MapBuckets - 1))));
+                _mapModels[b] = new GeometryModel3D { Material = material, BackMaterial = material };
+                _mapGroup.Children.Add(_mapModels[b]);
+            }
+
+            root.Children.Add(_mapGroup);
             root.Children.Add(_points);
             // Added last: WPF blends transparent models over what was drawn before, so it must not come first.
             root.Children.Add(CreateReferenceSphere(4.0));
@@ -362,6 +375,8 @@ namespace EchoEnvironment
             UpdateHeatmap(distances, size);
             EnsureZoneModels(distances.Length);
             double step = FieldOfViewDegrees / size;
+            bool keepMap = KeepMapCheckBox.IsChecked == true;
+            Matrix3D viewMatrix = _points.Transform.Value;
 
             var lines = new MeshGeometry3D();
 
@@ -392,10 +407,79 @@ namespace EchoEnvironment
                     model.Transform = new TranslateTransform3D(position);
                     ((DiffuseMaterial)model.Material).Brush = new SolidColorBrush(DistanceColor(mm));
                     AddLine(lines, position);
+                    if (keepMap)
+                    {
+                        AddToMap(viewMatrix.Transform(new Point3D(position.X, position.Y, position.Z)), mm);
+                    }
                 }
             }
 
             _lineModel.Geometry = lines;
+            if (keepMap)
+            {
+                RenderMapIfDue();
+            }
+        }
+
+        // Keeps only the latest reading per whole degree of world azimuth/elevation.
+        private void AddToMap(Point3D world, int mm)
+        {
+            double r = new Vector3D(world.X, world.Y, world.Z).Length;
+            int az = (int)Math.Round(Math.Atan2(world.X, -world.Z) * 180.0 / Math.PI);
+            int el = (int)Math.Round(Math.Asin(Math.Clamp(world.Y / r, -1, 1)) * 180.0 / Math.PI);
+            int bucket = (int)Math.Round(Math.Clamp(mm / MaxDistanceMm, 0, 1) * (MapBuckets - 1));
+            _map[(az + 180) * 181 + el + 90] = (world, bucket);
+        }
+
+        private void RenderMapIfDue()
+        {
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (_lastMapRender != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(_lastMapRender, now).TotalMilliseconds < 150)
+            {
+                return;
+            }
+
+            _lastMapRender = now;
+            var meshes = new MeshGeometry3D[MapBuckets];
+            for (int b = 0; b < MapBuckets; b++)
+            {
+                meshes[b] = new MeshGeometry3D();
+            }
+
+            foreach ((Point3D position, int bucket) in _map.Values)
+            {
+                MeshGeometry3D mesh = meshes[bucket];
+                int start = mesh.Positions.Count;
+                foreach (Point3D p in _cubeMesh.Positions)
+                {
+                    mesh.Positions.Add(new Point3D(position.X + p.X * 0.5, position.Y + p.Y * 0.5, position.Z + p.Z * 0.5));
+                }
+
+                foreach (int i in _cubeMesh.TriangleIndices)
+                {
+                    mesh.TriangleIndices.Add(start + i);
+                }
+            }
+
+            for (int b = 0; b < MapBuckets; b++)
+            {
+                meshes[b].Freeze();
+                _mapModels[b].Geometry = meshes[b];
+            }
+        }
+
+        private void KeepMap_Click(object sender, RoutedEventArgs e)
+        {
+            if (KeepMapCheckBox.IsChecked == true)
+            {
+                return;
+            }
+
+            _map.Clear();
+            foreach (GeometryModel3D model in _mapModels)
+            {
+                model.Geometry = null;
+            }
         }
 
         // WPF 3D has no line primitive, so each line is two crossed thin quads.
