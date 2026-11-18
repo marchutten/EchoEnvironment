@@ -58,7 +58,7 @@ namespace EchoEnvironment
 
             var boardRoot = new Model3DGroup();
             boardRoot.Children.Add(CreateWorldAxes());
-            _boardGroup.Transform = new Transform3DGroup { Children = { new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), 90)), new MatrixTransform3D(new Matrix3D(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)), _orientation } };
+            _boardGroup.Transform = new Transform3DGroup { Children = { new MatrixTransform3D(new Matrix3D(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)), _orientation, new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), 90)) } };
             _boardGroup.Children.Add(CreateBoardModel());
             AddAxes(_boardGroup, 0.5, 0.01);
             boardRoot.Children.Add(_boardGroup);
@@ -86,7 +86,7 @@ namespace EchoEnvironment
 
             double pitch = Math.Asin(Math.Clamp(-rotation.M32, -1, 1)) * 180.0 / Math.PI;
             double roll = Math.Atan2(rotation.M12, rotation.M22) * 180.0 / Math.PI;
-            OrientationText.Text = $"Orientation\nHeading: {heading,6:0.0}°\nPitch:   {pitch,6:0.0}°\nRoll:    {roll,6:0.0}°";
+            OrientationText.Text = $"Orientation\nHeading: {heading,6:0.0}°\nPitch:   {roll,6:0.0}°\nRoll:    {pitch,6:0.0}°";
         }
 
         private double _camYaw = 20;
