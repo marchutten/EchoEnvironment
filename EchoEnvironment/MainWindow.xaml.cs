@@ -69,7 +69,7 @@ namespace EchoEnvironment
             root.Children.Add(_points);
             // Added last: WPF blends transparent models over what was drawn before, so it must not come first.
             root.Children.Add(CreateReferenceSphere(4.0));
-            AddAxes(_axesGroup, 1.0, 0.003);
+            AddAxes(_axesGroup, 1.0, 0.01);
             _axesGroup.Transform = new Transform3DGroup { Children = { _axesScale, CreateViewTransform(true) } };
             SensorVisual.Content = root;
 
