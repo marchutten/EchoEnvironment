@@ -1,6 +1,6 @@
 ﻿# EchoEnvironment — Migration Plan
 
-**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `9a71f4f`, 13 commits ahead of `origin/main`, **working tree NOT clean** — Phase 3's changes are uncommitted. Solution builds 0 errors / 0 warnings across **four** projects.
+**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** the Phase 3 commit recorded in §10, **14 commits ahead** of `origin/main`, **working tree clean** — Phase 3 is committed. Solution builds 0 errors / 0 warnings across **four** projects; 181 tests pass.
 **Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · **3 ✅ code complete, gate PARTIALLY closed (§10)** · 4–7 pending.
 **Test suite:** **181 tests, 181 passed, 0 failed, 0 skipped** (was 130 before Phase 3).
 **Goal:** split the 755-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
