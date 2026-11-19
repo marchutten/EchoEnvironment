@@ -1,7 +1,7 @@
 ﻿# EchoEnvironment — Migration Plan
 
-**Baseline:** `main` @ `bc4413a` (Phase 0 complete). **Current head:** `0e08043`, working tree clean, 7 commits ahead of `origin/main`, solution builds 0 errors / 0 warnings.
-**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ automated gate verified (`295d5bf`), ⚠ visual check outstanding (§9.5) and ⚠ step 2d skipped (§9.7) · **3 ← next** · 4–7 pending.
+**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `7ee98b2`, working tree clean, 10 commits ahead of `origin/main`, solution builds 0 errors / 0 warnings.
+**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ⚠ step 2d deferred to Phase 3 (§9.7) · **3 ← next** · 4–7 pending.
 **Test suite:** **130 tests, 130 passed, 0 failed, 0 skipped.**
 **Goal:** split the 763-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
 
@@ -9,7 +9,7 @@
 
 ---
 
-## 0. Current state (verified against the tree at `0e08043`)
+## 0. Current state (verified against the tree at `7ee98b2`)
 
 ```
 EchoEnvironment.slnx                 3 projects: App, Core, Tests
@@ -39,9 +39,11 @@ EchoEnvironment.Tests/               net10.0-windows, UseWPF, xunit 2.9.2, Test.
 
 **Not yet created:** `EchoEnvironment.Hardware/` (Phase 3), `EchoEnvironment.Rendering/` (Phase 5).
 
-Repo hygiene: `.editorconfig`, `global.json`, `Directory.Build.props`, a .NET `.gitignore`, and a test suite all exist. The three empty `apply_grid*.ps1` are gone. **Still missing: CI workflow, README.** (`.github/copilot-instructions.md` exists; it is not CI.)
+Repo hygiene: `.editorconfig`, `global.json`, `Directory.Build.props`, a .NET `.gitignore`, a test suite, and a `pre-refactor` tag all exist. The three empty `apply_grid*.ps1` are gone. **Still missing: CI workflow, README.** (`.github/copilot-instructions.md` exists; it is not CI.)
 
 **The blocking coupling is resolved.** `OrientationFilter` no longer returns `Matrix3D` or uses `Vector3D`; it returns `Mat3` and uses `Vec3`, and it lives in an assembly that cannot see `PresentationCore`. That was the keystone of this plan, and it is done.
+
+**Phase 2 is closed on all three gate clauses** — build, tests, and the app was run after the extraction and renders and behaves correctly (§9.5, §9.6). Nothing is carried forward as an open obligation into Phase 3 except the deferred `SensorFrame` work (§9.7), which Phase 3 does anyway.
 
 **What remains blocking:** `MainWindow` is still 763 lines with 5 responsibilities, and serial I/O is still inline in `Connect_Click` / `Port_DataReceived`.
 
@@ -100,6 +102,7 @@ Use file-scoped namespaces everywhere (`namespace EchoEnvironment.Core;`) — th
 3. **TFM direction.** `net10.0-windows` may reference `net10.0`, never the reverse. This is what forces `Vec3`/`Mat3` into Core.
 4. ~~⚠️ `TargetFramework` now lives in `Directory.Build.props` as `net10.0-windows` — inherited by every new project.~~ **✅ FIXED in Phase 2.** `TargetFramework` was **removed** from `Directory.Build.props`; each csproj declares its own, where it is visible and intentional. See §7.4 for why the inherited form was dangerous, and §9.4 item 2 for the guard that now enforces the invariant it was meant to protect. **This gotcha must be re-applied to the new projects:** `EchoEnvironment.Core` is `net10.0`; `Hardware` and `Rendering` must each state `net10.0-windows` explicitly. Do not reintroduce a shared TFM.
 5. **Adding a project to `.slnx` on disk does not make Visual Studio load it.** This bit twice (§8, §9.4) and no automated tool could fix it. When a phase creates a new project, **expect to reload the solution manually** and verify by test count, not by the solution overview.
+6. **`.slnx` project entries are not self-documenting about load state.** `38813e1 "Add plan"` added both `EchoEnvironment.Core` and `EchoEnvironment.Tests` to `EchoEnvironment.slnx` and hung `MIGRATION_PLAN.md` in a `/Solution/` folder. The `.slnx` on disk lists 3 projects while `get_solution_overview` reports 2 — see §4's "Solution state is unreliable" row. When Phase 3 adds a fourth project, expect the same disagreement and verify by assembly + test count.
 
 ---
 
@@ -107,7 +110,7 @@ Use file-scoped namespaces everywhere (`namespace EchoEnvironment.Core;`) — th
 
 Each phase = one commit with a real message. Tag `pre-refactor` before Phase 1.
 
-> **Status note:** the tag was never created. `main` is 9 commits past `bc4413a` with no tag. It is still worth creating now — `git tag pre-refactor bc4413a` gives every later phase a known-good revert point, and it costs one command.
+> **Status note — corrected: the tag DOES exist.** `pre-refactor` → `f3475a1` ("Code state before refactor"), the last commit before Phase 0. An earlier pass of this plan claimed no tag had been created and recommended `git tag pre-refactor bc4413a`; that command now fails with *tag already exists*. The existing tag is the **better** baseline anyway — `bc4413a` is "add migration plan", which already contains the plan itself, whereas `f3475a1` is the genuine pre-refactor code state. Use `f3475a1` as the revert point for every later phase.
 
 ---
 
@@ -227,7 +230,7 @@ Also pinned as deliberate quirks rather than bugs: `16 or 25 => 16` / `64 or 73 
 
 ---
 
-### Phase 2 — Extract `EchoEnvironment.Core` (3–4 h) ← the keystone — ✅ DONE (`8d933b4`, gate verified `295d5bf`; ⚠ 2d skipped, ⚠ visual check outstanding)
+### Phase 2 — Extract `EchoEnvironment.Core` (3–4 h) ← the keystone — ✅ DONE, **gate fully closed** (`8d933b4`, automated `295d5bf`, visual verified §9.5; ⚠ step 2d deferred to Phase 3)
 
 **2a. Introduce Core's own math.** New file `Vec3.cs` + `Mat3.cs` in Core.
 
@@ -304,7 +307,7 @@ This is what lets Phase 6 resolve the `AddAxes` vs `CreateWorldAxes` disagreemen
 
 **Gate:** build green, tests green **unchanged** (they now reference Core), app renders identically. This is the moment to visually compare before/after — a regression here is invisible to the parser tests.
 
-> **Gate outcome:** build green ✅ (0 errors / 0 warnings). Tests green ✅ **130 passed, 0 failed, 0 skipped** — and the count *changed* from 117 to 130, which is correct: Phase 2 added tests, it did not alter existing ones. App renders identically ⚠️ **NOT CHECKED.** The visual comparison this gate exists to force has not been done. See §9.5.
+> **Gate outcome:** **all three clauses now green.** Build ✅ (0 errors / 0 warnings). Tests ✅ **130 passed, 0 failed, 0 skipped** — and the count *changed* from 117 to 130, which is correct: Phase 2 added tests, it did not alter existing ones. App renders identically ✅ **verified by running the app after the extraction** — it renders and behaves correctly (§9.5). The gate is closed.
 
 **Full Phase 2 record: §9.**
 
@@ -439,7 +442,7 @@ Order becomes a declared property of the design, not an accident of insertion se
 
 **Gate:** pixel-compare the rendered scene against a pre-refactor screenshot. Visual regressions here are subtle and tests won't catch them.
 
-> **Prerequisite not yet satisfied:** there is no pre-refactor screenshot. Take one **now**, at the current green state, and it serves both this gate and Phase 2's still-open visual check (§9.5).
+> **Prerequisite still not satisfied:** there is still no reference screenshot. Phase 2's visual check was a run-and-look (§9.5), which closes Phase 2's gate but produces no baseline image. Capture one **before** Phase 5 starts, not after — after Phase 5 there is nothing left to compare against, and the whole point of this gate is a diff.
 
 ---
 
@@ -494,7 +497,7 @@ protected override void OnStartup(StartupEventArgs e) {
 ```
 Phase 0  hygiene          → makes every later diff contain only code      ✅ done
 Phase 1  tests            → locks CURRENT behavior; must precede all moves ✅ done
-Phase 2  Core extraction  → the keystone; removes the WPF dependency       ✅ done
+Phase 2  Core extraction  → the keystone; removes the WPF dependency       ✅ done, gate closed
 Phase 3  ISensorStream    → unlocks offline development                    ← next
 Phase 4  coalescing       → fixes the throughput ceiling
 Phase 5  Rendering        → only now is it safe to touch the visual tree
@@ -515,7 +518,7 @@ Phase 7  polish
 
 | Risk | Likelihood | Impact | Mitigation | Status |
 |---|---|---|---|---|
-| `Mat3` row/column convention diverges from `Matrix3D` → mirrored or transposed scene | **High** | High | Phase 2 gate is a visual before/after comparison, not just a green build. Add a `WpfMath` round-trip test: `Vec3 → Mat3 → Matrix3D` applied to basis vectors must match `OrientationFilter`'s current output element-for-element. | 🟡 **Half done.** The automated half exists and passes (`WpfMathTests`: element-for-element copy, transpose detector, determinant + `row1 × row2 == row3` handedness detector, basis-vector comparison across all five poses). **The visual comparison has not been done.** This is the register's only High/High risk whose mitigation is still incomplete. |
+| `Mat3` row/column convention diverges from `Matrix3D` → mirrored or transposed scene | **High** | High | Phase 2 gate is a visual before/after comparison, not just a green build. Add a `WpfMath` round-trip test: `Vec3 → Mat3 → Matrix3D` applied to basis vectors must match `OrientationFilter`'s current output element-for-element. | ✅ **Closed for Phase 2.** Both halves now done: the automated half passes (`WpfMathTests`: element-for-element copy, transpose detector, determinant + `row1 × row2 == row3` handedness detector, basis-vector comparison across all five poses), and the app was run after the extraction and renders and behaves correctly (§9.5). **Reopens at Phase 5**, which rewires the visual tree; that gate needs a pixel comparison, and no reference screenshot exists yet — capture one before Phase 5 starts. |
 | Tests written *after* extraction, so they encode the refactor's bugs | Medium | High | Phase 1 is deliberately before Phase 2. Non-negotiable. | ✅ **Held.** Phase 2 did not start until Phase 1's gate was green. That ordering is what let §9.4's three failures be attributed confidently to test defects. |
 | `16 or 25 => 16` / `64 or 73 => 64` treated as a bug and "fixed" | Medium | Medium | Pin it in a test with a comment explaining it means "zones + IMU". Confirm with the firmware before changing it. | 🟡 **Pinned in tests and in a doc comment** on `SensorFrameParser`. **Still unconfirmed with the firmware** — that half has never been done. |
 | Shared mutable `_orientation` `MatrixTransform3D` embedded in two visual trees breaks when a group is frozen | Medium | Medium | Keep the group unfrozen; document the invariant in `OrbitCameraController`. Do not call `Freeze()` on `_points` or `_boardGroup`. | ⬜ Untouched. `MainWindow` still holds `_orientation` as a shared `MatrixTransform3D`; `OrbitCameraController` does not exist until Phase 5. |
@@ -524,6 +527,7 @@ Phase 7  polish
 | Behavior drift in `LineFramer` (framing bugs = dropped/corrupted frames) | Medium | High | `LineFramer` gets its own test suite in Phase 3a, plus a `ReplaySensorStream` parity check against a real capture. | ⬜ Not started. Note the parity check needs a **real captured log**, which the repo does not have. Capture one during Phase 3's hardware session, before writing `ReplaySensorStream`. |
 | **A test that asserts nothing is mistaken for protection** — *added after Phase 2* | **High** | High | Four such guards were written in Phase 2 and only revealed themselves by failing or by review: a `-windows` substring check that can never fire, a WPF-signature check matching only `WindowsBase`, a namespace filter that omitted `IsPublic`, and a cross-product assertion that was mathematically false. **A green suite is not evidence that the guards assert anything.** Review each guard by asking what would have to change for it to fail; if the answer is "nothing," it is decoration. | 🟡 **Ongoing discipline, not a one-time fix.** Applies to every guard added in Phases 3–6. |
 | **Solution state is unreliable** — *added after §8 and §9.4, which were the same failure twice* | Medium | Medium | `get_solution_overview` reported 1 project in §8 and 2 projects in every Phase 2 run, including green ones, while the `.slnx` on disk listed 3. Neither the overview nor the `.slnx` on disk proves a project is loaded. **Evidence that a project is loaded: its assembly was produced, and the test count matches expectation.** A test count *lower* than expected means discovery silently skipped something. | ✅ **Understood and applied.** Do not re-attempt automated fixes; go straight to the manual reload. |
+| **A manual "looks fine" check is mistaken for a pixel comparison** — *added when Phase 2's visual gate closed* | Medium | High | Phase 2's gate asked only that the app "renders identically", and a run-and-look is the right strength for that: a mirrored or transposed `Mat3` is glaring in a 3D view. Phase 5's gate asks for a **pixel diff**, and its changes are subtle by design (brush reuse, transform reuse, named layers, axis relabelling). Recording "I ran it and it looked fine" as satisfying both conflates two different bars. **Capture a reference screenshot before Phase 5 starts**, and state which bar each check actually meets. | ⬜ Open. No reference screenshot exists. Must be done before Phase 5, not after. |
 
 ---
 
@@ -540,7 +544,7 @@ Phase 7  polish
 - [ ] README documents the serial protocol. Phase 7.
 - [x] Git history has one commit per phase with a descriptive message, from `c69881d` onward. **Satisfied** — `c69881d`, `bc4413a`, `f534d57`, `8e19f97`, `8d933b4`, `3daf4b7`, `295d5bf`, `0e08043`.
       ~~Squash the `wip`/`ok`/`q` commits~~ — **withdrawn, see §7.1**: those commits are already published on `origin/main`.
-- [ ] **The app renders identically after every structural phase.** *Added after Phase 2.* This criterion was stated in the Phase 2 and Phase 5 gates but never listed here, so it could be left unsatisfied without any open checkbox. It is inherently manual, it is the only check that reaches the register's High/High mirrored-scene risk, and **it is currently unsatisfied for Phase 2.**
+- [x] **The app renders identically after every structural phase.** *Added after Phase 2.* This criterion was stated in the Phase 2 and Phase 5 gates but never listed here, so it could be left unsatisfied without any open checkbox. It is inherently manual, and it is the only check that reaches the register's High/High mirrored-scene risk. **Satisfied for Phase 2** — the app was run after the extraction and renders and behaves correctly (§9.5). Note the bar rises for Phase 5: a run-and-look closes Phase 2's gate but not Phase 5's pixel-compare gate, because Phase 5's changes are subtle by design. Capture a reference screenshot *before* starting Phase 5.
 
 ---
 
@@ -550,14 +554,14 @@ Phase 7  polish
 |---|---|---|---|
 | 0 Hygiene | 0.5 h | 0.5 h | ✅ DONE (`c69881d`) |
 | 1 Tests first | 2–3 h | 3.5 h | ✅ DONE (`f534d57`, gate `8e19f97`) |
-| 2 Core extraction | 3–4 h | 7.5 h | ✅ DONE (`8d933b4`, gate `295d5bf`) — ⚠ 2d deferred to 3, ⚠ visual check open |
+| 2 Core extraction | 3–4 h | 7.5 h | ✅ DONE, **gate fully closed** (`8d933b4`; automated `295d5bf`, visual §9.5) — ⚠ 2d deferred to Phase 3 |
 | 3 Hardware abstraction | 3 h | 10.5 h | ← **NEXT** (starts with `SensorFrame`, §9.7) |
 | 4 Coalescing stage | 2 h | 12.5 h | pending |
 | 5 Rendering extraction | 3 h | 15.5 h | pending |
 | 6 ViewModel + D1 fix | 2 h | 17.5 h | pending |
 | 7 Polish | 3–4 h | ~20 h | pending |
 
-**Minimum viable value is delivered at the end of Phase 2 (~7.5 h) — and Phase 2 is finished:** testable domain logic, no WPF dependency, a build that still works, and 130 passing tests. If nothing else is done, the migration has already paid for itself.
+**Minimum viable value is delivered at the end of Phase 2 (~7.5 h) — and Phase 2 is finished, gate closed:** testable domain logic, no WPF dependency, a build that still works, 130 passing tests, and a confirmed-working app. If nothing else is done, the migration has already paid for itself.
 
 Two costs the effort table did not anticipate: the two solution-reload blockers (§8, §9.4) and the four test defects that had to be diagnosed as *test* defects rather than code defects (§9.4). Budget similar overhead for Phase 3's new project.
 
@@ -575,6 +579,8 @@ I recommended squashing the `wip`/`ok`/`q` commits "before the first push." **Th
 
 **Withdrawn:** the squash criterion in §5.
 **Replaced with:** descriptive messages from `c69881d` forward. `c69881d` ("Phase 0: repo hygiene") and `bc4413a` ("add migration plan") already satisfy it. The pre-`c69881d` noise is permanent and cosmetic — it is not worth a force-push to a protected branch.
+
+**Note the coincidence worth understanding:** `origin/main` sits at `f3475a1`, and the `pre-refactor` tag also points at `f3475a1`. So the published boundary and the revert point are the same commit — everything from `c69881d` forward is local. That is why §7.1's warning matters concretely: the commits that would have been squashed are exactly the ones that are already public.
 
 ### 7.2 `AssemblyInfo.cs` is at the project root, not `Properties/`
 
@@ -612,6 +618,14 @@ This was the significant one. `Directory.Build.props` set `net10.0-windows` for 
 The build tool exposes no configuration switch. Three builds succeeded with 0 errors / 0 warnings and produced `bin/Debug/net10.0-windows/EchoEnvironment.exe`, but **no `bin/Release/` artifacts exist**. The Phase 0 gate ("build green") is satisfied for Debug.
 
 **This has now survived Phases 1 and 2 unaddressed.** Every green result recorded in §8 and §9 is a Debug result. Run a Release build manually — the cost is one command, and the failure mode it is guarding against (a Release-only warning that `TreatWarningsAsErrors` turns into an error, or a Release-only analyzer complaint in the test project) has so far never been exercised.
+
+**Re-attempted after Phase 2; confirmed unfixable with the available tooling.** The build tool exposes only `project_name` and `timeout_seconds` — there is no configuration parameter — and it built Debug, verified empirically: Debug artifacts present for all three projects, `bin\Release\` probed and absent for all three, including the `.pdb`. `run_tests` explicitly assumes a Debug build. So this is not a gap that a different prompt would close; it requires a terminal:
+
+```bash
+dotnet build EchoEnvironment.slnx -c Release
+```
+
+Worth doing before Phase 3 adds a fourth project that inherits `TreatWarningsAsErrors`, because a Release-only warning surfacing for the first time in Phase 5 would be attributed to the rendering work.
 
 ---
 
@@ -677,7 +691,7 @@ Kept as written, with the outcome recorded, because four of the five predictions
 
 ---
 
-## 9. Phase 2 record — code complete, automated gate VERIFIED ✅ (visual check outstanding, §9.5)
+## 9. Phase 2 record — **gate fully closed** ✅ (automated §9.4, visual §9.5)
 
 §8's blocker was resolved by the manual solution reload: the suite ran and Phase 1's gate passed — **117 tests, 116 passed, 0 failed, 1 skipped** (`8e19f97`). Five defects surfaced on first execution, all in test code, none in production; see the `8e19f97` commit message. The most instructive: **WPF's `Matrix3D` has no `M41`/`M42`/`M43`** — the fourth row's translation elements are `OffsetX`/`OffsetY`/`OffsetZ`. `M44` does exist, which is why only three of four looked-wrong lines failed to compile.
 
@@ -738,11 +752,14 @@ Note also that the solution overview reported only 2 projects in **every** run, 
 - **`CoreAssemblyReferencesNoWpfAssembly` passes.** The keystone invariant is now enforced by a test rather than by a convention someone must remember.
 - **`OrientationFilterNoLongerExposesMatrix3D` passes**, asserting the inverse of what Phase 1 asserted.
 - **`MainWindow` is 763 lines** (758 at `bc4413a`; Phase 2 added 5). Phase 2 changed only `SetOrientation`'s signature and one `using`. The thinning is Phase 6b, and §5's "< 200 lines" target is untouched.
-- **The gate's third clause — "app renders identically" — is still unverified.** No test can check it. `WpfMathTests` is the automated mitigation (element-for-element copy, transpose detector, determinant + `row1 × row2 == row3` handedness detector, Core-vs-WPF basis-vector comparison across all five poses), and those all pass. **The visual before/after comparison is still outstanding and is still required.**
+- **The gate's third clause — "app renders identically" — is now satisfied.** The app was run after Phase 2 and renders and behaves correctly. `WpfMathTests` remains the automated mitigation (element-for-element copy, transpose detector, determinant + `row1 × row2 == row3` handedness detector, Core-vs-WPF basis-vector comparison across all five poses), and those all pass.
+- **What that check was, stated precisely.** A manual run-and-look, not a pixel diff against a pre-Phase-2 screenshot. That is the right strength for Phase 2's gate, which only asks whether the app "renders identically": a mirrored or transposed `Mat3` layout is glaringly visible in the 3D view, and the whole point of the gate was to catch that one failure mode. It is the wrong strength for Phase 5, whose changes are subtle by design. Do not carry "I ran it and it looked fine" forward as if it satisfied §5's pixel-compare bar for Phase 5.
 
 ### 9.6 Consequence for sequencing
 
-Phase 2's gate is green on the automated half. **Phase 3 may proceed**, with one carried-forward obligation: the visual render comparison from Phase 2 has not been done, and it is the only check that addresses the High/High mirrored-scene risk that a passing unit suite cannot reach.
+**Phase 2's gate is fully green** — automated half verified (§9.4) and the app was run and renders and behaves correctly (§9.5). **Phase 3 may proceed with no carried-forward obligation.**
+
+One caveat about what "fully green" means, so it is not over-read: the visual check was a manual run-and-look, not a pixel comparison against a pre-Phase-2 screenshot. It is sufficient to close Phase 2's gate clause, which asked only that the app "renders identically" — a mirrored or transposed scene would be obvious on sight. It is **not** sufficient for Phase 5's gate, which asks for a pixel comparison, because Phase 5 changes the visual tree in ways that are subtle by design (brush reuse, transform reuse, named layers, `AddAxes` relabelling). Take a screenshot of the current state before starting Phase 5, not after.
 
 ### 9.7 ⚠️ Phase 2 step 2d was NOT done — `SensorFrame` does not exist
 
@@ -766,8 +783,8 @@ Git does not track empty directories, so it is invisible to `git status` and app
 
 ### 9.9 Open obligations carried into Phase 3
 
-1. **Visual before/after render comparison for Phase 2** (§9.5). Take a screenshot now and compare against the pre-Phase-2 app. Also unblocks Phase 5's pixel-compare gate.
-2. **Release build has never been run** (§7.5).
-3. **`pre-refactor` tag was never created** (§2). `git tag pre-refactor bc4413a`.
+1. ~~**Visual before/after render comparison for Phase 2**~~ ✅ **DONE** — the app was run after Phase 2 and renders and behaves correctly. What that does and does not prove is recorded in §9.5; Phase 5's stricter pixel-compare bar is still open.
+2. **Release build has never been run** (§7.5). Re-attempted after Phase 2 and **confirmed impossible with the available build tool** — it has no configuration parameter and builds Debug. Needs `dotnet build EchoEnvironment.slnx -c Release` in a terminal.
+3. ~~**`pre-refactor` tag was never created**~~ ✅ **It exists** — `pre-refactor` → `f3475a1` ("Code state before refactor"), the last commit before Phase 0. A better baseline than the `bc4413a` this plan recommended, since `bc4413a` already contains the plan itself.
 4. **Firmware confirmation of the 25/73-value quirk** (§4) has never been done.
 5. **Physical tilt to settle the Pitch/Roll labels** (§5, Phase 6a). The regression test exists; the human verification does not.
