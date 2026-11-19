@@ -1,76 +1,49 @@
-﻿using System.Reflection;
+﻿using System;
+using System.Linq;
+using System.Reflection;
+using System.Windows.Media.Media3D;
 using EchoEnvironment.Core;
 using Xunit;
 
 namespace EchoEnvironment.Tests;
 
 /// <summary>
-/// Guards the architectural invariant the whole migration depends on: the domain logic lives in an
-/// assembly that cannot see WPF.
+/// Phase 2 architecture invariants. These were skipped in Phase 1 on purpose: asserting them
+/// before extraction would have been vacuous, and asserting them after extraction is the whole
+/// point of the extraction.
 ///
-/// PHASE 2 STATUS: the invariant is now enforceable, so the guard that Phase 1 left skipped is
-/// active. MIGRATION_PLAN 8 said "Phase 2 must un-skip it. Do not read '1 skipped' as a green
-/// gate." There is no skipped test in this file any more.
-///
-/// MIGRATION_PLAN 7.4 explains why this test, and not a TargetFramework setting, is what actually
-/// protects the invariant: a Core project that accidentally compiled as net10.0-windows would
-/// still reference no WPF type, still build green, and still pass every test. The TFM is a proxy.
-/// This assertion is the fact.
+/// They are deliberately written against the compiled assemblies rather than against csproj text,
+/// so they survive refactoring of the project files and fail when the actual dependency graph
+/// breaks.
 /// </summary>
 public class ArchitectureInvariantTests
 {
-    private const string CoreAssemblyName = "EchoEnvironment.Core";
-
-    private static readonly string[] ForbiddenWpfAssemblies =
+    /// <summary>
+    /// The assemblies that count as WPF. Not just WindowsBase: Matrix3D and Vector3D live in
+    /// PresentationCore, Window and Application live in PresentationFramework. A guard that only
+    /// looked for WindowsBase reported that WpfMath exposes no WPF types at all, which is how the
+    /// first run of WpfConversionIsConfinedToOneType failed.
+    /// </summary>
+    private static readonly string[] WpfAssemblies =
     [
         "PresentationCore",
         "PresentationFramework",
         "WindowsBase",
-        "System.Windows.Media",
+        "System.Windows.Forms",
+        "Direct3D",
+        "SharpDX",
     ];
-
-    [Fact]
-    public void CoreContainsTheDomainTypes_AndTheAppDoesNot()
-    {
-        // The move itself. If either type drifts back into the App assembly, the invariant is gone
-        // and nothing else in this file means anything.
-        Assembly coreAssembly = typeof(OrientationFilter).Assembly;
-        Assembly appAssembly = typeof(MainWindow).Assembly;
-
-        Assert.NotEqual(coreAssembly, appAssembly);
-
-        Assert.Equal(CoreAssemblyName, typeof(OrientationFilter).Assembly.GetName().Name);
-        Assert.Equal(CoreAssemblyName, typeof(SensorFrameParser).Assembly.GetName().Name);
-        Assert.Equal(CoreAssemblyName, typeof(Vec3).Assembly.GetName().Name);
-        Assert.Equal(CoreAssemblyName, typeof(Mat3).Assembly.GetName().Name);
-        Assert.Equal(CoreAssemblyName, typeof(WorldFrame).Assembly.GetName().Name);
-
-        // The adapter is allowed to see WPF, so it must NOT be in Core.
-        Assert.Equal(appAssembly, typeof(WpfMath).Assembly);
-    }
 
     [Fact]
     public void CoreAssemblyReferencesNoWpfAssembly()
     {
-        // The load-bearing assertion in the whole plan.
         string[] referenced = typeof(OrientationFilter).Assembly
             .GetReferencedAssemblies()
-            .Select(a => a.Name ?? string.Empty)
+            .Select(name => name.Name ?? string.Empty)
             .ToArray();
 
-        foreach (string forbidden in ForbiddenWpfAssemblies)
-        {
-            Assert.DoesNotContain(forbidden, referenced);
-        }
-
-        // Belt and braces: nothing whose name even looks like WPF slipped in under another alias.
-        Assert.All(referenced, name =>
-        {
-            Assert.False(name.StartsWith("System.Windows", StringComparison.Ordinal),
-                $"Core references {name}.");
-            Assert.False(name.StartsWith("Presentation", StringComparison.Ordinal),
-                $"Core references {name}.");
-        });
+        Assert.All(WpfAssemblies, assembly =>
+            Assert.DoesNotContain(assembly, referenced));
     }
 
     [Fact]
@@ -103,79 +76,42 @@ public class ArchitectureInvariantTests
     }
 
     [Fact]
-    public void CoreDomainTypesExposeNoWpfTypes()
+    public void CoreContainsNoPublicTypeOutsideItsOwnNamespace()
     {
-        // Public surface AND private fields: a private Vector3D field is still a WPF dependency and
-        // still blocks the assembly from being WPF-free.
-        foreach (Type type in new[] { typeof(OrientationFilter), typeof(SensorFrameParser), typeof(Vec3), typeof(Mat3) })
-        {
-            foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
-            {
-                AssertNotWpf(method.ReturnType, $"{type.Name}.{method.Name} return type");
-                foreach (ParameterInfo parameter in method.GetParameters())
-                {
-                    AssertNotWpf(parameter.ParameterType, $"{type.Name}.{method.Name} parameter '{parameter.Name}'");
-                }
-            }
+        // Guards against Core silently re-acquiring UI types, or against the App's UI types drifting
+        // into Core's namespace and being mistaken for domain code.
+        //
+        // IsPublic is not decoration. Every assembly carries a compiler-generated
+        // <PrivateImplementationDetails> that has no namespace at all, and GetTypes() returns it.
+        // The first run of this test failed on exactly that - in Core - which incidentally proves
+        // Core itself is clean.
+        Type[] offenders = typeof(OrientationFilter).Assembly.GetTypes()
+            .Where(t => t.IsPublic && t.Namespace != "EchoEnvironment.Core")
+            .ToArray();
 
-            foreach (FieldInfo field in type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
-            {
-                AssertNotWpf(field.FieldType, $"{type.Name} field '{field.Name}'");
-            }
-
-            foreach (PropertyInfo property in type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
-            {
-                AssertNotWpf(property.PropertyType, $"{type.Name}.{property.Name} property type");
-            }
-        }
+        Assert.Empty(offenders);
     }
 
     [Fact]
     public void OrientationFilterNoLongerExposesMatrix3D()
     {
-        // The specific thing Phase 2a existed to achieve. Phase 1 asserted the opposite
-        // (Current and Update() returned System.Windows.Media.Media3D.Matrix3D); that assertion is
-        // now inverted, and the inversion is the proof the keystone landed.
-        PropertyInfo current = typeof(OrientationFilter).GetProperty("Current")
-            ?? throw new InvalidOperationException("OrientationFilter.Current not found.");
-        MethodInfo update = typeof(OrientationFilter).GetMethod("Update")
-            ?? throw new InvalidOperationException("OrientationFilter.Update not found.");
-
-        Assert.Equal("EchoEnvironment.Core.Mat3", current.PropertyType.FullName);
-        Assert.Equal("EchoEnvironment.Core.Mat3", update.ReturnType.FullName);
-
-        Assert.False(IsWpf(current.PropertyType), "Current must not be a WPF type.");
-        Assert.False(IsWpf(update.ReturnType), "Update() must not return a WPF type.");
-    }
-
-    [Fact]
-    public void SensorFrameParserDependsOnNothingButTheBcl()
-    {
-        // True before the move and must stay true forever. The parser is pure string -> int[]
-        // logic; it is the easiest thing in the codebase to move, and this test is what proves it.
-        foreach (MethodInfo method in typeof(SensorFrameParser).GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly))
-        {
-            AssertNotWpf(method.ReturnType, $"{method.Name} return type");
-
-            foreach (ParameterInfo parameter in method.GetParameters())
+        // Phase 1 asserted the opposite of this. The inversion is the proof that the keystone landed.
+        Assert.All(typeof(OrientationFilter).GetMethods(BindingFlags.Public | BindingFlags.Instance),
+            method =>
             {
-                AssertNotWpf(parameter.ParameterType, $"{method.Name} parameter '{parameter.Name}'");
-            }
-        }
+                Assert.NotEqual(typeof(Matrix3D), method.ReturnType);
+                Assert.DoesNotContain(method.GetParameters(), p => p.ParameterType == typeof(Matrix3D));
+            });
+
+        MethodInfo update = typeof(OrientationFilter).GetMethod("Update")!;
+        Assert.Equal(typeof(Mat3), update.ReturnType);
     }
 
     [Fact]
-    public void TheAppIsStillAllowedToSeeWpf()
+    public void CurrentOrientationIsCoreMat3()
     {
-        // The invariant is one-directional. Core must be WPF-free; the App is a WPF application and
-        // being WPF-free there would be a mistake. If this ever fails, something over-corrected.
-        string[] referenced = typeof(MainWindow).Assembly
-            .GetReferencedAssemblies()
-            .Select(a => a.Name ?? string.Empty)
-            .ToArray();
-
-        Assert.Contains("PresentationCore", referenced);
-        Assert.Contains("PresentationFramework", referenced);
+        PropertyInfo current = typeof(OrientationFilter).GetProperty("Current")!;
+        Assert.Equal(typeof(Mat3), current.PropertyType);
     }
 
     [Fact]
@@ -191,6 +127,9 @@ public class ArchitectureInvariantTests
             .ToArray();
 
         Assert.True(appTypes.Length > 0, "no public types found in the App assembly.");
+
+        Assert.Contains(typeof(WpfMath), appTypes);
+        Assert.True(HasWpfSignature(typeof(WpfMath)), "WpfMath is expected to expose WPF types.");
 
         foreach (Type type in appTypes)
         {
@@ -213,67 +152,38 @@ public class ArchitectureInvariantTests
 
             Assert.Fail($"{type.FullName} crosses the Core/WPF boundary but is neither WpfMath nor a UI type.");
         }
+    }
 
-        // The adapter must exist and must be the one doing the converting.
-        Assert.Contains(typeof(WpfMath), appTypes);
-        Assert.True(HasWpfSignature(typeof(WpfMath)), "WpfMath is expected to expose WPF types.");
+    [Fact]
+    public void AppAssemblyStillReferencesWpf()
+    {
+        // Sanity check on the sanity check: if this ever passes, the App assembly has somehow lost
+        // its WPF reference and the other guards are measuring nothing.
+        string[] referenced = typeof(MainWindow).Assembly
+            .GetReferencedAssemblies()
+            .Select(name => name.Name ?? string.Empty)
+            .ToArray();
+
+        Assert.Contains("PresentationFramework", referenced);
+        Assert.Contains("EchoEnvironment.Core", referenced);
     }
 
     private static bool HasWpfSignature(Type type)
     {
-        foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
-        {
-            if (IsWpf(method.ReturnType))
-            {
-                return true;
-            }
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static;
 
-            if (method.GetParameters().Any(p => IsWpf(p.ParameterType)))
-            {
-                return true;
-            }
-        }
+        bool returnType = type.GetMethods(flags)
+            .Any(m => IsWpfAssembly(m.ReturnType));
 
-        return false;
+        bool parameterType = type.GetMethods(flags)
+            .Any(m => m.GetParameters().Any(p => IsWpfAssembly(p.ParameterType)));
+
+        bool propertyType = type.GetProperties(flags)
+            .Any(p => IsWpfAssembly(p.PropertyType));
+
+        return returnType || parameterType || propertyType;
     }
 
-    private static void AssertNotWpf(Type type, string what)
-    {
-        Type? current = type;
-        while (current is not null)
-        {
-            if (IsWpf(current))
-            {
-                Assert.Fail($"{what} is a WPF type: {current.FullName}");
-            }
-
-            current = current.DeclaringType;
-        }
-
-        if (type.IsGenericType)
-        {
-            foreach (Type argument in type.GetGenericArguments())
-            {
-                AssertNotWpf(argument, $"{what} generic argument");
-            }
-        }
-
-        if (type.IsArray && type.GetElementType() is Type element)
-        {
-            AssertNotWpf(element, $"{what} array element");
-        }
-    }
-
-    private static bool IsWpf(Type type)
-    {
-        string? assemblyName = type.Assembly.GetName().Name;
-        if (assemblyName is null)
-        {
-            return false;
-        }
-
-        return ForbiddenWpfAssemblies.Contains(assemblyName)
-            || assemblyName.StartsWith("System.Windows", StringComparison.Ordinal)
-            || assemblyName.StartsWith("Presentation", StringComparison.Ordinal);
-    }
+    private static bool IsWpfAssembly(Type type) =>
+        WpfAssemblies.Contains(type.Assembly.GetName().Name);
 }

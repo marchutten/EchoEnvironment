@@ -82,12 +82,14 @@ public class WpfMathTests
     /// basis vector through Core must give the same world direction as transforming it through WPF.
     /// If Mat3 and Matrix3D disagreed about which axis is which, this is where it shows up.
     /// </summary>
+    // Plain string literals, not nameof(...): these are switch cases in PoseMatrix, not symbols,
+    // so there is nothing for nameof to resolve against.
     [Theory]
-    [InlineData(nameof(FlatFacingNorth))]
-    [InlineData(nameof(FlatFacingEast))]
-    [InlineData(nameof(TiltedUp345))]
-    [InlineData(nameof(InvertedFacingNorth))]
-    [InlineData(nameof(GeneralPose))]
+    [InlineData("FlatFacingNorth")]
+    [InlineData("FlatFacingEast")]
+    [InlineData("TiltedUp345")]
+    [InlineData("InvertedFacingNorth")]
+    [InlineData("GeneralPose")]
     public void CoreAndWpfTransformTheSameBasisVectorsToTheSameWorldDirections(string poseName)
     {
         Mat3 core = PoseMatrix(poseName);
@@ -150,11 +152,19 @@ public class WpfMathTests
         AssertMath.Close(0, WorldFrame.North.Y, Tolerance, "North.Y");
         AssertMath.Close(-1, WorldFrame.North.Z, Tolerance, "North.Z must be -1");
 
-        // East x Up = North, i.e. +x cross +y = -z for this left-handed-looking world frame.
+        // East x Up == South == -North. The first run of this test asserted East x Up == North and
+        // failed with "expected -1, got 1", and the test was the thing that was wrong: +x cross +y is
+        // +z by definition, so a frame with X east, Y up and Z south is simply right-handed. North is
+        // the -Z axis, which is exactly why Mat3.CreateOrientation negates its north column.
+        // Asserting the reverse here would have written a falsehood into the suite as documentation.
         Vec3 cross = Vec3.Cross(WorldFrame.East, WorldFrame.Up);
-        AssertMath.Close(WorldFrame.North.X, cross.X, Tolerance, "East x Up == North, X");
-        AssertMath.Close(WorldFrame.North.Y, cross.Y, Tolerance, "East x Up == North, Y");
-        AssertMath.Close(WorldFrame.North.Z, cross.Z, Tolerance, "East x Up == North, Z");
+        AssertMath.Close(WorldFrame.South.X, cross.X, Tolerance, "East x Up == South, X");
+        AssertMath.Close(WorldFrame.South.Y, cross.Y, Tolerance, "East x Up == South, Y");
+        AssertMath.Close(WorldFrame.South.Z, cross.Z, Tolerance, "East x Up == South, Z");
+
+        AssertMath.Close(-WorldFrame.North.X, cross.X, Tolerance, "East x Up == -North, X");
+        AssertMath.Close(-WorldFrame.North.Y, cross.Y, Tolerance, "East x Up == -North, Y");
+        AssertMath.Close(-WorldFrame.North.Z, cross.Z, Tolerance, "East x Up == -North, Z");
     }
 
     [Fact]

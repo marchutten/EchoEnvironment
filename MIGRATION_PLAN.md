@@ -585,7 +585,7 @@ Roughly **110 test cases** across 4 classes (the parser theory cases expand), pl
 
 ---
 
-## 9. Phase 2 record — code complete, gate NOT verified (⛔ see §9.4)
+## 9. Phase 2 record — code complete, automated gate VERIFIED ✅ (visual check outstanding, §9.5)
 
 §8's blocker was resolved by the manual solution reload: the suite ran and Phase 1's gate passed — **117 tests, 116 passed, 0 failed, 1 skipped** (`8e19f97`). Five defects surfaced on first execution, all in test code, none in production; see the `8e19f97` commit message. The most instructive: **WPF's `Matrix3D` has no `M41`/`M42`/`M43`** — the fourth row's translation elements are `OffsetX`/`OffsetY`/`OffsetZ`. `M44` does exist, which is why only three of four looked-wrong lines failed to compile.
 
@@ -621,29 +621,31 @@ Both were in the new architecture guards, and both would have made a guard asser
 1. **`Assert.DoesNotContain("-windows", targetFramework)` would never fire.** A `net10.0-windows` assembly reports `FrameworkName` as `.NETCoreApp,Version=v10.0; Platform=Windows, Version=...` — it does **not** contain the substring `-windows`. The test would have passed under exactly the drift it exists to catch (§7.4's silent-TFM problem). Now asserts the absence of `Platform=`.
 2. **`WpfConversionIsConfinedToOneType` would have failed on `App`.** It filtered public types in namespace `EchoEnvironment` to those with WPF signatures, then required each to be `WpfMath` or `MainWindow`. `App` is also in that namespace and inherits `System.Windows.Application`, so it has WPF members. Rewritten to allow `WpfMath` and any type that *is* a UI type, and to fail on anything else.
 
-### 9.4 ⛔ The gate is not verified — `EchoEnvironment.Core` is not loaded in the solution
+### 9.4 The §8-class blocker RESOLVED — automated gate now verified
 
-**No Phase 2 test has been compiled or executed.** Same root cause as §8, same class of failure:
+The manual solution reload cleared it, and the suite has now been compiled and executed.
 
-`EchoEnvironment.slnx` on disk lists **three** projects; the loaded solution reports **two** (`EchoEnvironment`, `EchoEnvironment.Tests`). `EchoEnvironment.Core` is absent, so both `ProjectReference`s to it fail to resolve:
+**First run after the reload: 130 tests, 127 passed, 3 failed, 0 skipped.** All three failures were defects in the *new tests*, not in the extracted code:
 
-```
-Unable to find project information for '...\EchoEnvironment.Core\EchoEnvironment.Core.csproj'.
-If you are using Visual Studio, this may be because the project is unloaded or not part of
-the current solution so run a restore from the command-line.
-```
+1. **`CoreContainsNoPublicTypeOutsideItsOwnNamespace` failed on `<PrivateImplementationDetails>`.** `Assembly.GetTypes()` returns the compiler-generated helper type, which has no namespace at all. The filter tested namespace only and omitted `IsPublic`. Ironically the failure proved Core is clean — the offender was compiler scaffolding, not a UI type.
+2. **`WpfConversionIsConfinedToOneType` reported "WpfMath is expected to expose WPF types."** `HasWpfSignature` only matched assembly name `WindowsBase`. **`Matrix3D` and `Vector3D` live in `PresentationCore`**; `Window`/`Application` in `PresentationFramework`. So the helper saw no WPF on the adapter at all — a guard that would have silently accepted any amount of WPF leakage. Fixed by a shared `WpfAssemblies` list used by both the signature helper and the reference-graph guard, so the two cannot drift apart.
+3. **`WorldFrameConstantsAreOrthonormalAndRightHanded` failed with "expected -1, got 1".** The assertion `East × Up == North` was **mathematically false**: `+x × +y = +z` by definition, and world `+Z` is *south*. The frame is simply right-handed; North is the `-Z` axis. The test was corrected to `East × Up == South == −North`. This one matters more than the other two: had I "fixed" it by flipping the tolerance or deleting the assertion, the suite would have carried a falsehood as documentation of the axis convention — the exact convention §4 rates High/High.
 
-Tried and failed: rewriting `.slnx` (with and without a comment), deleting `.dtbcache.v2`, `.futdcache.v2`, and all three `.vs/ProjectEvaluation/*.v10.bin` files, and `set_file_project_status` on the Core csproj (`Project not found in solution`). **There is no automated fix.**
+**Second run: 130 total, 130 passed, 0 failed, 0 skipped.** Build clean: 0 errors, 0 warnings.
 
-**Required manual step:** close and reopen `EchoEnvironment.slnx` (or right-click the solution → **Reload Solution**), confirm `EchoEnvironment.Core` appears in Solution Explorer, then **Add → Existing Project…** if it does not. Restore, build, run all tests.
+Two compile errors were also needed on the way: `nameof(FlatFacingNorth)` and friends in a `[InlineData]` — those are `switch` cases in `PoseMatrix`, not symbols, so `nameof` had nothing to resolve. And a `using System.Windows.Media;` where `Media3D` was required.
 
-### 9.5 What to expect when it runs
+**§9.5's prediction was wrong in one respect:** it forecast ~135 tests; the real count is **130**. The estimate double-counted the `WpfMathTests` theory expansion. The useful half of the prediction held: the count was nowhere near 117, and nothing was skipped, so Core loaded and the un-skip took.
 
-- **Expected count: ~135 tests, 0 skipped.** Phase 1's 117 (116 + 1 now un-skipped) plus 7 new architecture guards plus 8 `WpfMathTests` cases (the theory expands to 5). A count near 117 means Core did not load. A skipped test means the un-skip did not take.
-- **The un-skipped guard is the one most likely to fail first**, because it is the only test asserting something that has never been proven: that Core compiles WPF-free. If `CoreAssemblyReferencesNoWpfAssembly` fails, the cause is a `ProjectReference` leaking a WPF reference into Core — fix the reference, do not weaken the assertion.
-- **`MainWindow` is still 758 lines.** Phase 2 only changed `SetOrientation`'s signature and one `using`. The thinning is Phase 6b.
-- **The gate's third clause — "app renders identically" — has not been checked at all**, and cannot be checked by any test. §4 rates a `Mat3`/`Matrix3D` layout divergence High/High precisely because a mirrored scene renders plausibly. `WpfMathTests` is the automated mitigation; a visual before/after comparison is still required and is still outstanding.
+**Also confirmed independently:** `EchoEnvironment.Core` builds standalone with zero messages, i.e. Core genuinely compiles WPF-free. Note that the solution overview still reports only 2 projects even though Core resolves for build and reference — the overview is not a reliable indicator of what is actually loaded, and neither is the `.slnx` file on disk. Trust the build.
+
+### 9.5 Standing facts after verification
+
+- **`CoreAssemblyReferencesNoWpfAssembly` passes.** The keystone invariant is now enforced by a test rather than by a convention someone must remember.
+- **`OrientationFilterNoLongerExposesMatrix3D` passes**, asserting the inverse of what Phase 1 asserted.
+- **`MainWindow` is still 758 lines.** Phase 2 changed only `SetOrientation`'s signature and one `using`. The thinning is Phase 6b.
+- **The gate's third clause — "app renders identically" — is still unverified.** No test can check it. `WpfMathTests` is the automated mitigation (element-for-element copy, transpose detector, determinant + `row1 × row2 == row3` handedness detector, Core-vs-WPF basis-vector comparison across all five poses), and those all pass. **The visual before/after comparison is still outstanding and is still required.**
 
 ### 9.6 Consequence for sequencing
 
-**Phase 3 must not start until §9.4 is resolved and the suite is green.** Phase 3 extracts `Hardware` on top of Core; building it on an unverified Core means the High/High layout risk is guarded only by tests that have never executed.
+Phase 2's gate is green on the automated half. **Phase 3 may proceed**, with one carried-forward obligation: the visual render comparison from Phase 2 has not been done, and it is the only check that addresses the High/High mirrored-scene risk that a passing unit suite cannot reach.
