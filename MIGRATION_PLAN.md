@@ -1107,9 +1107,127 @@ Splitting a move is not the same as splitting a behaviour change, so §3 rule 2 
 2. ⚠️ **The app has not been run since this change.** §11.8 item 1 was closed by the user's run *before* Phase 5; that run predates commit 1, so the obligation reopens immediately.
 3. ⚠️ **Release build still unverified** — now for five projects and three phases of changes. §11.8 item 2, carried from §10.
 4. ⚠️ **`ToArray()` copies are still in `RenderFrame`,** and §10.2's "there is now something to delete in Phase 5" — the `out int[]` wrapper — **has not been deleted.** Both are Phase 5 work that commit 1 did not reach.
-5. ⚠️ **`MainWindow`'s rewiring is still covered by no test.** No test drives `Connect_Click`, `Disconnect`, the timer, or any render path. §10.7 / §11.6 unchanged, and commit 1 touched render call sites.
+5. ⚠️ **`MainWindow`'s command handlers are still covered by no test.** Partly narrowed by 12.9: the render path it used to own (`UpdateFrame`, `UpdateHeatmap`, `EnsureZoneModels`, `AddToMap`, `RenderMapIfDue`) is now covered by `ZoneRendererTests`, and the camera arithmetic by `MainWindowNoLongerOwnsCameraOrZoneState`. Still uncovered: `Connect_Click`, `Disconnect`, `RefreshPorts`, the `DispatcherTimer`, and `RenderFrame`'s status-line formatting. §10.7 / §11.6 otherwise unchanged.
 6. ⚠️ **D5 and D7 remain unfixed**, still owed as their own commits (§3 rule 2).
 7. ⚠️ **Latency at 115200 baud unmeasured** (§11.8 item 3), **no real serial log** for the `ReplaySensorStream` parity check (§11.8 item 4), **firmware 25/73 confirmation** never done, **physical tilt** never done.
 8. ⚠️ **`EchoEnvironment\Math\` still exists and is empty** — manual `rmdir`, invisible to git and to solution-file listings (§9.8).
-9. **`MainWindow.xaml.cs` is 595 lines**, not < 200. Phase 6b.
+9. **`MainWindow.xaml.cs` is 389 lines** (595 after 12.2's commit 1, 827 before Phase 5), not < 200. Phase 6b.
 10. **`TreatWarningsAsErrors` still has not bitten at Phase 5.** §7.3 predicted it would; five projects built clean, 0 warnings, including the new one. The prediction remains untested rather than disproved — it may still bite when XAML is touched in 5c.
+
+---
+
+## 12.9 Phase 5 commit 2 — the stateful members moved, and four findings
+
+Commit 2 moved the members that carry state across frames: `UpdateFrame`, `UpdateHeatmap`,
+`EnsureZoneModels`, `AddToMap`, `RenderMapIfDue` → `Rendering/ZoneRenderer.cs` + `Core/WorldMap.cs`;
+`CreateViewTransform`, `UpdateCamera`, `RotateView`, the camera state and the `View_*` handlers →
+`App/OrbitCameraController.cs`.
+
+| File | Lines | Contents |
+|---|---|---|
+| `EchoEnvironment.Core/WorldMap.cs` | 76 | `Add` / `Clear` / `Entries` / `Count`, from `AddToMap`; `Vec3` not `Point3D` |
+| `EchoEnvironment.Rendering/ZoneRenderer.cs` | 261 | `UpdateFrame`, `UpdateHeatmap`, `EnsureZoneModels`, `RenderMapIfDue`, `ClearMap` |
+| `EchoEnvironment/OrbitCameraController.cs` | 170 | camera state, `UpdateCamera`, `Nudge*`, `Zoom`, `Reset`, `RotateScene`, drag, `CreateViewTransform` |
+| `EchoEnvironment.Tests/WorldMapTests.cs` | 210 | 10 tests — the first tests ever written against this arithmetic |
+| `EchoEnvironment.Tests/ZoneRendererTests.cs` | 445 | 13 tests, all on STA threads |
+| `EchoEnvironment.Tests/StaRunner.cs` | 65 | STA-thread helper; see finding 3 |
+| `EchoEnvironment.Tests/ArchitectureInvariantTests.cs` | 381 → **486** | 3 new guards; `HasWpfSignature` / `HasCoreSignature` **fixed** (finding 2) |
+| `EchoEnvironment/MainWindow.xaml.cs` | **595 → 389** (−206) | 13 fields + 1 constant + 8 methods deleted, call sites rewired, one unused import dropped |
+
+`MainWindow.xaml.cs` is 827 → 595 → **389** across the two commits. Still ~2× §5's target; the rest is 6b.
+
+### Finding 1 — the plan's field names were wrong, and the guard now pins the real ones
+
+§5's table names the camera state `_yaw/_pitch/_zoom`. The fields `MainWindow` actually held were
+`_camYaw`, `_camPitch`, `_camDistance`, `_viewRotation`, `_lastMouse`, `_dragging` — **six**, not three —
+plus five more on the zone/map side (`_map`, `_mapGroup`, `_mapModels`, `_lastMapRender`, `_zoneModels`).
+`MainWindowNoLongerOwnsCameraOrZoneState` asserts all eleven are absent **by name**, and asserts that
+`_orbit` and `_zones` exist, so the guard cannot pass by deleting the state along with the thing meant
+to hold it.
+
+A name check rather than a count: a count would keep passing while a field crept back under a new name
+with the behaviour still attached.
+
+### Finding 2 — the confined-conversion guard could not see constructors
+
+`ZoneRendererDoesNotExposeCoreTypes` failed on its own **positive** half first: `HasWpfSignature`
+reported that `ZoneRenderer` exposes no WPF types. It does not — none of its public methods return or
+take one. The three WPF types it needs arrive through its **constructor**, and neither
+`HasWpfSignature` nor `HasCoreSignature` had ever inspected constructors.
+
+So a type constructed from `Model3DGroup`, `Model3DGroup` and `UniformGrid` was invisible to the guard
+whose job is noticing WPF in public surface. Both helpers now inspect public instance constructors.
+This is a hole in a guard written in commit 1, found by a new test failing for the right reason.
+
+### Finding 3 — `ZoneRenderer` mixes an apartment-free job with a Dispatcher-affine one
+
+All 13 `ZoneRenderer` tests failed identically on the first run, at `new UniformGrid()`:
+
+> `System.InvalidOperationException : The calling thread must be STA, because many UI components require this.`
+> `at System.Windows.Input.InputManager..ctor()` → `FrameworkElement..ctor()` → `Controls.Panel..ctor()`
+
+Nothing else in the type needs an apartment: `Model3DGroup`, `GeometryModel3D`, `MeshGeometry3D` and the
+brushes all construct on a pooled thread. What needs one is the **2D heat grid** — a `FrameworkElement`.
+
+That is evidence about the design, not about the tests: `ZoneRenderer` holds two responsibilities, and
+the smaller one (the right-panel heat grid) is what forces every test of the larger one (3D zone
+geometry) onto a dedicated STA thread. Splitting `HeatGrid` out would let most of the renderer be tested
+on the thread pool. **Not done in this commit** — commit 2 is a move, and separating two responsibilities
+is a design change that owes its own step. Recorded as the strongest candidate for 6b.
+
+`StaRunner` is the cost of not splitting yet. Its doc comment records the stack trace, because the trace
+is the finding.
+
+### Finding 4 — promoting `AddToMap` to public Core API made two unreachable things reachable
+
+Both were unreachable *as a private method of a Window* and are still unreachable *from the app*; both
+are now pinned because `WorldMap.Add` is public API a future caller can misuse.
+
+- **Divide by zero.** `asin(Y / r)` with `r == 0` produced `(int)Round(Asin(NaN))` — a valid-looking key
+  computed from a non-number. `MainWindow` only ever reached this with `mm >= MinDistanceMm`, so `r` was
+  always positive. `Add` now throws `ArgumentException` for a zero-length position.
+- **Signed zero in the azimuth.** For a point on the Y axis, `atan2(world.X, -world.Z)` is
+  `atan2(+0.0, -0.0)`, which IEEE 754 defines as **+π**. So a vertical reading is filed at azimuth 180,
+  not 0, and `+0.0` versus `-0.0` in `X` puts the same direction in two different cells.
+  `VerticalDirectionSplitsOnTheSignOfZeroInX` pins this rather than leaving it to be discovered later.
+  `UpdateFrame` only ever produces elevations of ±19.6875° (8×8 fan at 45° FOV), so `world.Z` is never
+  exactly zero in production.
+
+### The design decision that the guard exists to protect
+
+`ZoneRenderer` owns a `WorldMap` (Core) in a **private** field and never names one in its public
+surface. Exposing it — a `Map` property, or an `AddReading` returning a bucket — would put a Core type
+and a WPF type in the same public signature, which is exactly what `WpfConversionIsConfinedToOneType`
+calls a conversion point, and that guard exempts only `WpfMath` and UI types.
+
+The alternative was to widen the exemption. It was not taken: `MainWindow` calls `ClearMap()` and never
+sees a `WorldMap`. `ZoneRendererDoesNotExposeCoreTypes` is the record that the invariant survived by
+changing the design rather than by relaxing the rule, and its failure message says so, so the next
+person who needs the map does not read the rule as the obstacle.
+
+`keepMap` became a **parameter** of `UpdateFrame` for the same kind of reason: reading
+`KeepMapCheckBox.IsChecked` inside the renderer would have made a rendering class depend on the window's
+XAML element names, which is worse coupling than the one it removes.
+
+### Evidence
+
+Build: Debug, whole solution, **0 errors / 0 warnings** across 5 projects.
+Tests: **222 total, 222 passed, 0 failed, 0 skipped** (was 196; +10 `WorldMapTests`, +13
+`ZoneRendererTests`, +3 guards).
+
+Two compile errors were found and fixed before any test could run: `Geometry3D` is the abstract base and
+has no `Positions` (it is on `MeshGeometry3D`), and `UniformGrid.Children` yields `UIElement`, which has
+no `Child` — the cast must go through `Border`. Both were mine, both were in new test code.
+
+`MainWindow` also lost `using System.Windows.Media;`: after the move the window touches no brush,
+material or colour, so the import became unused. Verified by listing every `System.Windows.Media` type
+name in the file — zero occurrences. (`System.Windows.Media.Media3D` is a separate namespace and is
+still needed.)
+
+### Gate status
+
+**Still open, and now open against a second commit.** §12.1's baseline predates commit 1. The user's
+run after commit 1 was reported as "seems to run fine" — a human eyeball check, not the pixel diff §5
+names, and it is unknown whether the grid/map toggles were exercised. **No run has happened since commit
+2**, which moved the camera drag, the key handler, the zone geometry, the heat grid and the map. Those
+are the exact things a visual check is for, and they are now the most exposed code in the migration.

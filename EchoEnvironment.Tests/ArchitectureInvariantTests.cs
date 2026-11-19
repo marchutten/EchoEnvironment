@@ -196,6 +196,7 @@ public class ArchitectureInvariantTests
     private static bool HasWpfSignature(Type type)
     {
         const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static;
+        const BindingFlags constructorFlags = BindingFlags.Public | BindingFlags.Instance;
 
         bool returnType = type.GetMethods(flags)
             .Any(m => IsWpfAssembly(m.ReturnType));
@@ -206,7 +207,15 @@ public class ArchitectureInvariantTests
         bool propertyType = type.GetProperties(flags)
             .Any(p => IsWpfAssembly(p.PropertyType));
 
-        return returnType || parameterType || propertyType;
+        // Constructors are public surface, and until Phase 5 commit 2 this guard could not see them.
+        // The gap was found by accident: ZoneRenderer's public methods name neither Core nor WPF,
+        // because the WPF groups it fills arrive through its constructor. A guard that inspects only
+        // methods would have reported that a type taking three WPF types to be constructed exposes no
+        // WPF types at all.
+        bool constructorType = type.GetConstructors(constructorFlags)
+            .Any(c => c.GetParameters().Any(p => IsWpfAssembly(p.ParameterType)));
+
+        return returnType || parameterType || propertyType || constructorType;
     }
 
     private static bool IsWpfAssembly(Type type) =>
@@ -220,6 +229,7 @@ public class ArchitectureInvariantTests
     private static bool HasCoreSignature(Type type)
     {
         const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static;
+        const BindingFlags constructorFlags = BindingFlags.Public | BindingFlags.Instance;
 
         bool returnType = type.GetMethods(flags)
             .Any(m => IsCoreAssembly(m.ReturnType));
@@ -230,7 +240,11 @@ public class ArchitectureInvariantTests
         bool propertyType = type.GetProperties(flags)
             .Any(p => IsCoreAssembly(p.PropertyType));
 
-        return returnType || parameterType || propertyType;
+        // Same reason as in HasWpfSignature: a constructor is part of what a type exposes.
+        bool constructorType = type.GetConstructors(constructorFlags)
+            .Any(c => c.GetParameters().Any(p => IsCoreAssembly(p.ParameterType)));
+
+        return returnType || parameterType || propertyType || constructorType;
     }
 
     private static bool IsCoreAssembly(Type type) =>
@@ -377,5 +391,96 @@ public class ArchitectureInvariantTests
         Assert.All(ramp.GetParameters(), parameter =>
             Assert.False(IsWpfAssembly(parameter.ParameterType),
                 $"ColorScale.For parameter '{parameter.Name}' is {parameter.ParameterType.FullName}; the ramp must stay testable without a UI."));
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 5 commit 2 guards. The stateful members moved here, and the design
+    // decision worth protecting is the one that was made to satisfy a rule rather
+    // than to work around it: ZoneRenderer owns a Core WorldMap but does not name
+    // one in its public surface.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// ZoneRenderer holds a WorldMap (Core) in a private field. If it ever exposed one publicly - a
+    /// Map property, an AddReading returning a bucket - its public surface would name a Core type and a
+    /// WPF type in the same breath, which is exactly what WpfConversionIsConfinedToOneType calls a
+    /// conversion point, and that guard exempts only WpfMath and UI types.
+    ///
+    /// The alternative was to widen the exemption to cover ZoneRenderer. This guard is the record that
+    /// the exemption was not taken: the invariant survived by changing the design (the map stays
+    /// private; MainWindow calls ClearMap() and never sees a WorldMap) instead of by relaxing the rule.
+    /// Without this test, the next person to need the map would add a public property and the confined
+    /// guard would fail with a message that reads as if the rule were the problem.
+    /// </summary>
+    [Fact]
+    public void ZoneRendererDoesNotExposeCoreTypes()
+    {
+        Assert.Equal("EchoEnvironment.Rendering", typeof(ZoneRenderer).Assembly.GetName().Name);
+
+        // The positive half: it does speak WPF, so the negative half below is measuring something
+        // rather than passing on an empty surface.
+        Assert.True(HasWpfSignature(typeof(ZoneRenderer)),
+            "ZoneRenderer is expected to expose WPF types; it builds the zone visuals.");
+
+        Assert.False(HasCoreSignature(typeof(ZoneRenderer)),
+            "ZoneRenderer names an EchoEnvironment.Core type in its public surface. Keep the WorldMap "
+            + "private and expose intent (ClearMap) instead: a public Core type here would be a second "
+            + "Core-to-WPF conversion point, and WpfConversionIsConfinedToOneType exempts only WpfMath "
+            + "and UI types.");
+    }
+
+    /// <summary>
+    /// WorldMap is Core, so its public surface must be WPF-free or the map arithmetic stops being
+    /// testable headlessly - which is the only reason it was extracted to Core rather than left in the
+    /// window. Same shape as ColorScaleRampIsInCore_AndIsWpfFree.
+    /// </summary>
+    [Fact]
+    public void WorldMapIsInCore_AndIsWpfFree()
+    {
+        Assert.Equal("EchoEnvironment.Core", typeof(WorldMap).Assembly.GetName().Name);
+
+        Assert.All(typeof(WorldMap).GetMethods(BindingFlags.Public | BindingFlags.Instance), method =>
+        {
+            Assert.False(IsWpfAssembly(method.ReturnType),
+                $"WorldMap.{method.Name} returns {method.ReturnType.FullName}; the map must stay testable without a UI.");
+            Assert.All(method.GetParameters(), parameter =>
+                Assert.False(IsWpfAssembly(parameter.ParameterType),
+                    $"WorldMap.{method.Name} parameter '{parameter.Name}' is {parameter.ParameterType.FullName}; the map must stay testable without a UI."));
+        });
+    }
+
+    /// <summary>
+    /// The state that moved out of the window must stay out. MIGRATION_PLAN 5 names the camera state as
+    /// `_yaw/_pitch/_zoom`, but the fields MainWindow actually held were `_camYaw`, `_camPitch`,
+    /// `_camDistance`, `_viewRotation`, `_lastMouse` and `_dragging` - six, not three - and the zone/map
+    /// state was five more. All eleven are asserted absent by name.
+    ///
+    /// Written as a name check rather than a count, because a count would pass while a field crept back
+    /// under a new name and the behaviour moved with it. Names are what a reader looks for when deciding
+    /// where a behaviour lives.
+    /// </summary>
+    [Fact]
+    public void MainWindowNoLongerOwnsCameraOrZoneState()
+    {
+        string[] movedOut =
+        [
+            "_camYaw", "_camPitch", "_camDistance", "_viewRotation", "_lastMouse", "_dragging",
+            "_map", "_mapGroup", "_mapModels", "_lastMapRender", "_zoneModels",
+        ];
+
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+
+        foreach (string name in movedOut)
+        {
+            FieldInfo? field = typeof(MainWindow).GetField(name, flags);
+            Assert.True(field is null,
+                $"MainWindow.{name} is back. It moved to OrbitCameraController or ZoneRenderer at Phase 5 commit 2; "
+                + "restoring it re-couples view state to the window.");
+        }
+
+        // And the replacements must actually be there, so the test above cannot pass by deleting both
+        // the state and the thing that holds it.
+        Assert.NotNull(typeof(MainWindow).GetField("_orbit", flags));
+        Assert.NotNull(typeof(MainWindow).GetField("_zones", flags));
     }
 }

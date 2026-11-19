@@ -1,7 +1,6 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
 using EchoEnvironment.Core;
@@ -19,18 +18,15 @@ namespace EchoEnvironment
         private const double MaxDistanceMm = 4000.0;
         private const double MinDistanceMm = 20.0;
 
-        // LineHalfWidth moved to ScenePrimitives with AddLine: it is the thickness of a drawn line,
-        // which is a rendering constant, not something the window needs to know.
-        private const double SceneUnitsPerMm = 1.0 / 1000.0;
+        // LineHalfWidth moved to ScenePrimitives with AddLine, and SceneUnitsPerMm moved to
+        // ZoneRenderer with UpdateFrame: both describe how a distance becomes a drawn thing, which is
+        // not something the window needs to know.
 
         private readonly Model3DGroup _boardGroup = new();
         private readonly Model3DGroup _points = new();
         private readonly MatrixTransform3D _orientation = new(Matrix3D.Identity);
         private readonly OrientationFilter _imuFilter = new();
         private long _lastImuTimestamp;
-        private readonly List<GeometryModel3D> _zoneModels = [];
-        private readonly MeshGeometry3D _cubeMesh = MeshFactory.CreateCubeMesh(0.02);
-        private readonly GeometryModel3D _lineModel = MeshFactory.CreateLineModel();
         private const string DefaultPort = "COM12";
         private ISensorStream? _stream;
 
@@ -43,11 +39,15 @@ namespace EchoEnvironment
 
         private int _frames;
         private const int MapBuckets = 16;
-        private readonly Dictionary<int, (Point3D Position, int Bucket)> _map = [];
-        private readonly Model3DGroup _mapGroup = new();
-        private readonly GeometryModel3D[] _mapModels = new GeometryModel3D[MapBuckets];
-        private long _lastMapRender;
         private readonly GeometryModel3D _gridModel = MeshFactory.CreateGridModel(3.98, 0.5);
+
+        // Phase 5 commit 2: the zone models, the heat-grid cells, the map dictionary, the bucket
+        // geometries and the map throttle moved to ZoneRenderer; the camera angles, the drag state and
+        // the scene rotation moved to OrbitCameraController. Both fields are assigned in the
+        // constructor rather than by initialiser, because both need XAML-named elements, which do not
+        // exist until InitializeComponent has run.
+        private readonly ZoneRenderer _zones;
+        private readonly OrbitCameraController _orbit;
 
         // Phase 4 (defect D2): frames arrive on the transport thread and are drained by this timer on
         // the UI thread, one per tick. The rate is a declared setting in the toolbar, so frame rate is
@@ -61,17 +61,21 @@ namespace EchoEnvironment
         {
             InitializeComponent();
 
+            // Both collaborators take XAML-named elements, so neither can exist before
+            // InitializeComponent. They are created before the scene graph because the view transforms
+            // below come from the orbit controller.
+            _orbit = new OrbitCameraController(Camera, SensorVisual, ViewBorder);
+
+            // The map group is a local now: its only consumer is ZoneRenderer, which fills it, and
+            // root, which places it in the scene. It no longer needs to be a field.
+            var mapGroup = new Model3DGroup();
+            _zones = new ZoneRenderer(_points, mapGroup, HeatGrid, MinDistanceMm, MaxDistanceMm, FieldOfViewDegrees, MapBuckets);
+
             var root = new Model3DGroup();
             root.Children.Add(MeshFactory.CreateSensorMarker());
-            _points.Transform = CreateViewTransform(false);
-            for (int b = 0; b < MapBuckets; b++)
-            {
-                var material = new DiffuseMaterial(new SolidColorBrush(ColorScale.For(b * MaxDistanceMm / (MapBuckets - 1), MaxDistanceMm).ToColor()));
-                _mapModels[b] = new GeometryModel3D { Material = material, BackMaterial = material };
-                _mapGroup.Children.Add(_mapModels[b]);
-            }
+            _points.Transform = _orbit.CreateViewTransform(false, _orientation);
 
-            root.Children.Add(_mapGroup);
+            root.Children.Add(mapGroup);
             root.Children.Add(_points);
             // Added last: WPF blends transparent models over what was drawn before, so it must not come first.
             // Phase 5c replaces this positional rule with named layers; until then the comment is the
@@ -81,13 +85,13 @@ namespace EchoEnvironment
 
             var boardRoot = new Model3DGroup();
             boardRoot.Children.Add(ScenePrimitives.CreateWorldAxes());
-            _boardGroup.Transform = CreateViewTransform(true);
+            _boardGroup.Transform = _orbit.CreateViewTransform(true, _orientation);
             _boardGroup.Children.Add(MeshFactory.CreateBoardModel());
             ScenePrimitives.AddAxes(_boardGroup, 0.5, 0.01);
             boardRoot.Children.Add(_boardGroup);
             BoardVisual.Content = boardRoot;
 
-            UpdateCamera();
+            _orbit.UpdateCamera();
             PreviewKeyDown += Window_PreviewKeyDown;
 
             // Phase 4: the render rate is a UI policy declared here, not a side effect of how fast
@@ -129,52 +133,6 @@ namespace EchoEnvironment
             OrientationText.Text = $"Orientation\nHeading: {heading,6:0.0}°\nPitch:   {roll,6:0.0}°\nRoll:    {pitch,6:0.0}°";
         }
 
-        private Transform3DGroup CreateViewTransform(bool remapModel)
-        {
-            var group = new Transform3DGroup();
-            if (remapModel)
-            {
-                group.Children.Add(new MatrixTransform3D(new Matrix3D(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)));
-            }
-            else
-            {
-                group.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(1, 0, 0), 180)));
-            }
-
-            group.Children.Add(_orientation);
-            group.Children.Add(new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), 90)));
-            return group;
-        }
-
-        private double _camYaw = 20;
-        private double _camPitch = 20;
-        private double _camDistance = 5;
-        private Point _lastMouse;
-        private bool _dragging;
-
-        private void UpdateCamera()
-        {
-            double yaw = _camYaw * Math.PI / 180.0;
-            double pitch = _camPitch * Math.PI / 180.0;
-            var position = new Vector3D(
-                _camDistance * Math.Cos(pitch) * Math.Sin(yaw),
-                _camDistance * Math.Sin(pitch),
-                _camDistance * Math.Cos(pitch) * Math.Cos(yaw));
-            Camera.Position = new Point3D(position.X, position.Y, position.Z);
-            Camera.LookDirection = -position;
-        }
-
-        private Quaternion _viewRotation = Quaternion.Identity;
-
-        private void RotateView(Vector3D axis, double degrees)
-        {
-            bool shift = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
-            var delta = new Quaternion(axis, shift ? -degrees : degrees);
-            _viewRotation = delta * _viewRotation;
-            _viewRotation.Normalize();
-            SensorVisual.Transform = new RotateTransform3D(new QuaternionRotation3D(_viewRotation));
-        }
-
         private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
         {
             if (System.Windows.Input.Keyboard.FocusedElement is TextBox or ComboBox or System.Windows.Controls.Primitives.TextBoxBase)
@@ -186,78 +144,65 @@ namespace EchoEnvironment
             switch (e.Key)
             {
                 case System.Windows.Input.Key.Left:
-                    _camYaw -= step;
+                    _orbit.NudgeYaw(-step);
                     break;
                 case System.Windows.Input.Key.Right:
-                    _camYaw += step;
+                    _orbit.NudgeYaw(step);
                     break;
                 case System.Windows.Input.Key.Up:
-                    _camPitch = Math.Clamp(_camPitch + step, -89, 89);
+                    _orbit.NudgePitch(step);
                     break;
                 case System.Windows.Input.Key.Down:
-                    _camPitch = Math.Clamp(_camPitch - step, -89, 89);
+                    _orbit.NudgePitch(-step);
                     break;
                 case System.Windows.Input.Key.Space:
-                    _viewRotation = Quaternion.Identity;
-                    SensorVisual.Transform = Transform3D.Identity;
-                    _camYaw = 20;
-                    _camPitch = 20;
-                    _camDistance = 5;
-                    UpdateCamera();
+                    _orbit.Reset();
                     e.Handled = true;
                     return;
                 case System.Windows.Input.Key.X:
-                    RotateView(new Vector3D(1, 0, 0), step);
+                    _orbit.RotateScene(new Vector3D(1, 0, 0), step);
                     e.Handled = true;
                     return;
                 case System.Windows.Input.Key.Y:
-                    RotateView(new Vector3D(0, 1, 0), step);
+                    _orbit.RotateScene(new Vector3D(0, 1, 0), step);
                     e.Handled = true;
                     return;
                 case System.Windows.Input.Key.Z:
-                    RotateView(new Vector3D(0, 0, 1), step);
+                    _orbit.RotateScene(new Vector3D(0, 0, 1), step);
                     e.Handled = true;
                     return;
                 default:
                     return;
             }
 
-            UpdateCamera();
+            // The arrow cases used to fall through to an UpdateCamera() call at the end of this
+            // method; each Nudge now refreshes the camera itself, so nothing is owed here except
+            // marking the key handled.
             e.Handled = true;
         }
 
         private void View_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
-            _dragging = true;
+            // Focus stays here: it is the window's own focus, not part of the orbit's state.
             Focus();
-            _lastMouse = e.GetPosition(ViewBorder);
-            ViewBorder.CaptureMouse();
+            _orbit.BeginDrag(e.GetPosition(ViewBorder));
         }
 
         private void View_MouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
-            _dragging = false;
-            ViewBorder.ReleaseMouseCapture();
+            _orbit.EndDrag();
         }
 
         private void View_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
         {
-            if (!_dragging)
-            {
-                return;
-            }
-
-            Point p = e.GetPosition(ViewBorder);
-            _camYaw -= (p.X - _lastMouse.X) * 0.5;
-            _camPitch = Math.Clamp(_camPitch + (p.Y - _lastMouse.Y) * 0.5, -89, 89);
-            _lastMouse = p;
-            UpdateCamera();
+            // DragTo carries the _dragging guard, so a move that is not part of a drag is ignored
+            // here exactly as it was when the check sat in this method.
+            _orbit.DragTo(e.GetPosition(ViewBorder));
         }
 
         private void View_MouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
         {
-            _camDistance = Math.Clamp(_camDistance * (e.Delta > 0 ? 0.9 : 1.1), 0.5, 30);
-            UpdateCamera();
+            _orbit.Zoom(e.Delta);
         }
 
         private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshPorts();
@@ -384,11 +329,11 @@ namespace EchoEnvironment
                 SetOrientation(_imuFilter.Update(frame.Imu.ToArray(), dt));
             }
 
-            // The two ToArray() copies exist because UpdateFrame and UpdateHeatmap still take
-            // int[]. Retargeting them to ReadOnlyMemory is Phase 5's job; until then the hot
-            // path pays two small allocations per frame, which is what it paid before too.
+            // The ToArray() copy exists because ZoneRenderer.UpdateFrame still takes int[].
+            // Retargeting it to ReadOnlyMemory is Phase 5's remaining job; until then the hot path pays
+            // one small allocation per frame, which is what it paid before too.
             int[] distances = frame.Distances.ToArray();
-            UpdateFrame(distances);
+            _zones.UpdateFrame(distances, KeepMapCheckBox.IsChecked == true);
             ReadOnlySpan<int> imu = frame.Imu.Span;
             string imuText = frame.HasImu
                 ? $" | gyro {imu[0]},{imu[1]},{imu[2]} accel {imu[3]},{imu[4]},{imu[5]} mag {imu[6]},{imu[7]},{imu[8]}"
@@ -416,137 +361,8 @@ namespace EchoEnvironment
             _renderTimer.Interval = RenderInterval(hz);
         }
 
-        private void UpdateHeatmap(int[] distances, int size)
-        {
-            if (HeatGrid.Children.Count != distances.Length)
-            {
-                HeatGrid.Rows = size;
-                HeatGrid.Columns = size;
-                HeatGrid.Children.Clear();
-                for (int i = 0; i < distances.Length; i++)
-                {
-                    HeatGrid.Children.Add(new Border
-                    {
-                        Margin = new Thickness(1),
-                        Child = new TextBlock
-                        {
-                            HorizontalAlignment = HorizontalAlignment.Center,
-                            VerticalAlignment = VerticalAlignment.Center,
-                            FontSize = size == 8 ? 10 : 14,
-                            Foreground = Brushes.White
-                        }
-                    });
-                }
-            }
 
-            for (int i = 0; i < distances.Length; i++)
-            {
-                var cell = (Border)HeatGrid.Children[i];
-                int mm = distances[i];
-                bool valid = mm >= MinDistanceMm && mm <= MaxDistanceMm;
-                cell.Background = new SolidColorBrush(valid ? ColorScale.For(mm, MaxDistanceMm).ToColor() : Color.FromRgb(50, 50, 50));
-                ((TextBlock)cell.Child).Text = valid ? mm.ToString() : "-";
-            }
-        }
 
-        private void UpdateFrame(int[] distances)
-        {
-            int size = distances.Length == 64 ? 8 : 4;
-            UpdateHeatmap(distances, size);
-            EnsureZoneModels(distances.Length);
-            double step = FieldOfViewDegrees / size;
-            bool keepMap = KeepMapCheckBox.IsChecked == true;
-            Matrix3D viewMatrix = _points.Transform.Value;
-
-            var lines = new MeshGeometry3D();
-
-            for (int row = 0; row < size; row++)
-            {
-                for (int col = 0; col < size; col++)
-                {
-                    int index = row * size + col;
-                    GeometryModel3D model = _zoneModels[index];
-                    int mm = distances[index];
-
-                    if (mm < MinDistanceMm || mm > MaxDistanceMm)
-                    {
-                        model.Transform = new ScaleTransform3D(0, 0, 0);
-                        continue;
-                    }
-
-                    double az = (col - (size - 1) / 2.0) * step * Math.PI / 180.0;
-                    double el = ((size - 1) / 2.0 - row) * step * Math.PI / 180.0;
-
-                    // Sensor looks along -Z; X is right, Y is up.
-                    double r = mm * SceneUnitsPerMm;
-                    var position = new Vector3D(
-                        r * Math.Cos(el) * Math.Sin(az),
-                        r * Math.Sin(el),
-                        -r * Math.Cos(el) * Math.Cos(az));
-
-                    model.Transform = new TranslateTransform3D(position);
-                    ((DiffuseMaterial)model.Material).Brush = new SolidColorBrush(ColorScale.For(mm, MaxDistanceMm).ToColor());
-                    ScenePrimitives.AddLine(lines, position);
-                    if (keepMap)
-                    {
-                        AddToMap(viewMatrix.Transform(new Point3D(position.X, position.Y, position.Z)), mm);
-                    }
-                }
-            }
-
-            _lineModel.Geometry = lines;
-            if (keepMap)
-            {
-                RenderMapIfDue();
-            }
-        }
-
-        // Keeps only the latest reading per whole degree of world azimuth/elevation.
-        private void AddToMap(Point3D world, int mm)
-        {
-            double r = new Vector3D(world.X, world.Y, world.Z).Length;
-            int az = (int)Math.Round(Math.Atan2(world.X, -world.Z) * 180.0 / Math.PI);
-            int el = (int)Math.Round(Math.Asin(Math.Clamp(world.Y / r, -1, 1)) * 180.0 / Math.PI);
-            int bucket = (int)Math.Round(Math.Clamp(mm / MaxDistanceMm, 0, 1) * (MapBuckets - 1));
-            _map[(az + 180) * 181 + el + 90] = (world, bucket);
-        }
-
-        private void RenderMapIfDue()
-        {
-            long now = System.Diagnostics.Stopwatch.GetTimestamp();
-            if (_lastMapRender != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(_lastMapRender, now).TotalMilliseconds < 150)
-            {
-                return;
-            }
-
-            _lastMapRender = now;
-            var meshes = new MeshGeometry3D[MapBuckets];
-            for (int b = 0; b < MapBuckets; b++)
-            {
-                meshes[b] = new MeshGeometry3D();
-            }
-
-            foreach ((Point3D position, int bucket) in _map.Values)
-            {
-                MeshGeometry3D mesh = meshes[bucket];
-                int start = mesh.Positions.Count;
-                foreach (Point3D p in _cubeMesh.Positions)
-                {
-                    mesh.Positions.Add(new Point3D(position.X + p.X * 0.5, position.Y + p.Y * 0.5, position.Z + p.Z * 0.5));
-                }
-
-                foreach (int i in _cubeMesh.TriangleIndices)
-                {
-                    mesh.TriangleIndices.Add(start + i);
-                }
-            }
-
-            for (int b = 0; b < MapBuckets; b++)
-            {
-                meshes[b].Freeze();
-                _mapModels[b].Geometry = meshes[b];
-            }
-        }
 
         private void ShowGrid_Click(object sender, RoutedEventArgs e)
         {
@@ -565,31 +381,9 @@ namespace EchoEnvironment
                 return;
             }
 
-            _map.Clear();
-            foreach (GeometryModel3D model in _mapModels)
-            {
-                model.Geometry = null;
-            }
+            _zones.ClearMap();
         }
 
-        private void EnsureZoneModels(int count)
-        {
-            if (_zoneModels.Count == count)
-            {
-                return;
-            }
-
-            _points.Children.Clear();
-            _points.Children.Add(_lineModel);
-            _zoneModels.Clear();
-            for (int i = 0; i < count; i++)
-            {
-                var material = new DiffuseMaterial(Brushes.White);
-                var model = new GeometryModel3D(_cubeMesh, material) { BackMaterial = material };
-                _zoneModels.Add(model);
-                _points.Children.Add(model);
-            }
-        }
 
     }
 }
