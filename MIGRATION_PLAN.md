@@ -1014,3 +1014,100 @@ Frames reach the UI through exactly one path: `ISensorStream.FrameReceived` → 
 8. **Physical tilt to settle the Pitch/Roll labels** (§5, Phase 6a) — still never done.
 9. **Reference screenshot before Phase 5** (§4) — still none, and Phase 5 is now next.
 10. **§9.8's empty `EchoEnvironment/Math/` directory** — manual `rmdir EchoEnvironment\Math`, still not done.
+
+---
+
+## 12. Phase 5 record — **in progress**: first half of the move done, gate **not closed** ⚠️
+
+**Build:** Debug, whole solution, **0 errors / 0 warnings** across **five** projects.
+**Tests:** **196 total, 196 passed, 0 failed, 0 skipped** (was 193; **+3 new guards**).
+**Gate:** **NOT closed.** §2 Phase 5's gate is "pixel-compare the rendered scene against a pre-refactor screenshot." The baseline now exists (§12.1); **no comparison has been performed**, because no tool available here can capture or diff a window. What commit 1 offers instead is a diff that can be *read*: every removed method body reappears verbatim in its new file, so the change is checkable as a relocation rather than trusted as one. Running the app against §12.1 is the user's step and is **still open**.
+
+§9.10's evidence rule was applied rather than the overview: the count rose **193 → 196**, exactly the three guards added, and `LoadSolution` then reported **5** projects including `EchoEnvironment.Rendering`. The reload was performed first and the count checked, per §8's refined procedure — no **Add → Existing Project…**, no manual restore. §11.8 item 6 is closed: the overview is accurate after a reload, as §9.10 predicted.
+
+### 12.1 The reference screenshot exists — captured **before** Phase 5, as §4 and §2 both demanded
+
+Provided by the user as a window capture. No tool here can write image bytes, so the **PNG itself is the user's to save** (suggested `docs/baseline/pre-phase5.png`); what is recorded here is the state it shows, which is the half a pixel comparison needs in order to be interpretable.
+
+| Control | Value in the baseline |
+|---|---|
+| Connection | **Disconnected** (`Connect` button shown, not `Disconnect`) |
+| Port / Baud | `COM12` / `115200` |
+| Show grid | **off** |
+| Keep map | **off** |
+| Render | **60 Hz** |
+| Left 3D view | Empty except one small **orange** sensor marker near centre |
+| Right panel | `Zone distances (mm)` heading, heat grid **empty** |
+| Board view | Green board plane, **red X**, **green Y (up)**, **cyan Z (into −Z)**, with matching letter labels |
+| Status line | `Orientation: no IMU data` |
+
+Two things this baseline is *not*: it is not a connected scene, so it cannot validate zone colours, lines, map accumulation or the grid; and it is not a substitute for the §11.8 item 3 latency measurement. A comparison against it proves the disconnected scene is unchanged — which is exactly what commit 1 claims, and nothing more.
+
+### 12.2 What commit 1 created
+
+| File | Lines | Contents |
+|---|---|---|
+| `EchoEnvironment.Rendering/EchoEnvironment.Rendering.csproj` | 21 | `net10.0-windows` + `UseWPF`, references **Core only** |
+| `EchoEnvironment.Rendering/MeshFactory.cs` | 174 | 8 static factories from the plan's row 1, bodies verbatim |
+| `EchoEnvironment.Rendering/ScenePrimitives.cs` | 104 | `AddLine`, `AddAxes`, `CreateAxisLabel`, `CreateWorldAxes`, bodies verbatim |
+| `EchoEnvironment.Rendering/WpfMath.cs` | 50 | The adapter, moved from the App; `+ ToColor(this in Rgb)` |
+| `EchoEnvironment.Core/ColorScale.cs` | 37 | `Rgb` record struct + `ColorScale.For(mm, maxDistance)` |
+| `EchoEnvironment.Tests/ArchitectureInvariantTests.cs` | 252 → **388** | `WpfConversionIsConfinedToOneType` **retargeted and its rule rewritten**; 3 new guards; `HasCoreSignature` / `IsCoreAssembly` helpers |
+| `EchoEnvironment/WpfMath.cs` | **deleted** (38) | Superseded by the Rendering copy |
+| `EchoEnvironment/MainWindow.xaml.cs` | **827 → 593** (−234) | 12 static members deleted, call sites rewired |
+
+`MainWindow.xaml.cs` is now **593 lines** — the largest single reduction the migration has produced, and the first movement *toward* §5's "< 200 lines" criterion. It is still 3× that target; the rest is Phase 6b.
+
+### 12.3 Three corrections to the plan's own text — one of them would not have compiled
+
+1. **§2 Phase 5's mapping table cannot be implemented as written.** It maps `DistanceColor` to `Core/ColorScale.cs` with the parenthetical "pure math — belongs in Core so it's testable." The method's signature is `private static Color DistanceColor(double mm)`, and `System.Windows.Media.Color` lives in **PresentationCore**. Moving it verbatim would have broken `CoreAssemblyReferencesNoWpfAssembly` and, because Core is plain `net10.0` with no `UseWPF`, would not have compiled at all. The plan is right about the *intent* and silent about the *mechanism*: the arithmetic is Core's, the `Color` construction is WPF's. Split accordingly — `ColorScale.For` returns a WPF-free `Rgb`, and the conversion to `Color` is `WpfMath.ToColor`, which keeps the single-boundary invariant instead of creating a second conversion point in `MainWindow`. `ColorScaleRampIsInCore_AndIsWpfFree` pins the split so the ramp cannot drift back.
+2. **§2 5e's stated reason for retargeting the guard is wrong, and the truth is more favourable.** It predicts that leaving the guard alone makes it "keep inspecting the App assembly, find no WPF-typed public types there, and pass for the wrong reason." It does not. The old body asserted `Assert.Contains(typeof(WpfMath), appTypes)`, and `WpfMath` left the App assembly in this commit, so the untouched guard **fails loudly**, not silently. The retarget is still required — for a different reason: the rule the guard was meant to state was never stated by it.
+3. **§2 5e's path `Rendering/Math/WpfMath.cs` reintroduces a trap the plan itself documented.** §9.2 deviation 3 exists because a namespace named `Math` shadows `System.Math` in every file importing it. A namespace following that folder would be `EchoEnvironment.Rendering.Math`, in the assembly with the most `Math.Abs` / `Math.Clamp` / `Math.PI` calls in the codebase. The file sits flat at `Rendering/WpfMath.cs`, namespace `EchoEnvironment.Rendering`. The deviation is recorded in the file's own doc comment so the folder is not "helpfully" recreated later.
+
+### 12.4 The guard's rule had to change, not just its target
+
+The old rule — *only `WpfMath` and UI types may expose WPF types* — cannot survive Phase 5, because **Rendering's entire job is exposing WPF types**. `MeshFactory.CreateCubeMesh` returns `MeshGeometry3D`; that is the design working, not a hole. What has to stay confined is the **conversion**: a public signature naming Core and WPF in the same breath.
+
+The retargeted guard therefore scans **App + Rendering**, and fails on any public type that speaks *both* unless it is `WpfMath` or a `Window`/`Application`. `HasWpfSignature` alone could not express that; `HasCoreSignature` was added so the two together state the Phase 5 rule.
+
+**A defect in my own new guard, caught by reading before it ran.** The first version exempted UI types but **not `WpfMath` itself** — which speaks Core and WPF by definition, so the guard would have failed on the very type it exists to protect. It never reached the build. §4's High/High discipline ("what would have to change for it to fail?") is what caught it; the 196-green run is not the evidence that the guard is sound.
+
+### 12.5 Three new guards, and what each would have to change to fail
+
+| Guard | Fails if |
+|---|---|
+| `RenderingAssemblyReferencesCoreAndNoOtherSolutionAssembly` | Rendering reaches into the App, Tests or Hardware — the edge §1's dependency graph forbids and nothing in the graph prevents; **or** Rendering stops referencing `PresentationCore`, i.e. someone re-declares it plain `net10.0` and every factory stops compiling. |
+| `CoreAssemblyDoesNotReferenceRendering` | Core acquires Rendering — the cause of the WPF leak that `CoreAssemblyReferencesNoWpfAssembly` only detects as a symptom. |
+| `ColorScaleRampIsInCore_AndIsWpfFree` | `ColorScale.For` returns a WPF type or takes one as a parameter — i.e. the ramp stops being testable headlessly, which is the only reason it was moved. |
+
+Each asserts a positive half as well as a prohibition, per §4's rule that a one-directional check passes happily under the drift it exists to catch.
+
+### 12.6 Behaviour deliberately preserved (this commit is a move, not a fix)
+
+- **Every geometry body is verbatim** — triangle winding, `Freeze()` placement, magic sizes (`0.02`, `3.98, 0.5`, `0.0005`, `0.06`, `4.0`, `1.5`), the sphere's 12×24 tessellation, the cube's 12-triangle order. A visual difference after this commit is evidence of a broken move, not of a design change.
+- **`DistanceColor`'s arithmetic is unchanged element-for-element**; only the return type moved. `MaxDistanceMm` is now passed explicitly at all three call sites, which is the same value the ramp was always calibrated to.
+- **`AddAxes` and `CreateWorldAxes` were NOT reconciled.** D9 is defect 5d, and relabelling axes changes pixels. This commit is the one the pixel comparison is supposed to prove neutral, so the two disagreeing axis sets were moved as-is.
+- **The positional layer rule is still positional.** `ShowGrid_Click` still inserts at `Children.Count - 1` and the constructor still appends the reference sphere "last". 5c replaces that; until then a comment records why the order is not free.
+- **`_orientation` is still a shared mutable `MatrixTransform3D` embedded in two visual trees**, still unfrozen — §4's Medium/Medium row is untouched, because `OrbitCameraController` does not exist yet.
+
+### 12.7 The commit split, and where it deviates from the agreed plan
+
+The agreed split was three commits: **move** / **5a+5b allocation** / **5c+5d layer order + axis convention**, so a visual regression is attributable to exactly one change. That split is being honoured, with one honest adjustment: **the move itself is larger than one commit**, because the plan's mapping table contains two very different kinds of member.
+
+- **Commit 1 (this one):** the 12 **static, stateless** members, `WpfMath`, and the `DistanceColor` split. Checkable by reading the diff, because there is no state to preserve.
+- **Commit 2 (still to do):** the **stateful** members — `UpdateFrame`, `UpdateHeatmap`, `EnsureZoneModels`, `AddToMap`, `RenderMapIfDue` → `Rendering/ZoneRenderer.cs` + `Core/WorldMap.cs`, and `CreateViewTransform` / `UpdateCamera` / `RotateView` / the `View_*` handlers / `_camYaw` `_camPitch` `_camDistance` `_viewRotation` `_lastMouse` `_dragging` → `App/OrbitCameraController.cs`. These carry mutable state across frames, so "verbatim" is not sufficient evidence for them and they deserve their own revertable step.
+
+Splitting a move is not the same as splitting a behaviour change, so §3 rule 2 is not bent here: no correctness fix is bundled into either commit.
+
+### 12.8 Known gaps and open obligations carried forward
+
+1. ⚠️ **The pixel comparison has not been done.** §12.1 is the baseline; the comparison is a human step. Until it happens, Phase 5's gate stays open and commit 1 is *unverified visually* — the strongest claim available from the automated evidence is "the build is clean and the diff is a relocation."
+2. ⚠️ **The app has not been run since this change.** §11.8 item 1 was closed by the user's run *before* Phase 5; that run predates commit 1, so the obligation reopens immediately.
+3. ⚠️ **Release build still unverified** — now for five projects and three phases of changes. §11.8 item 2, carried from §10.
+4. ⚠️ **`ToArray()` copies are still in `RenderFrame`,** and §10.2's "there is now something to delete in Phase 5" — the `out int[]` wrapper — **has not been deleted.** Both are Phase 5 work that commit 1 did not reach.
+5. ⚠️ **`MainWindow`'s rewiring is still covered by no test.** No test drives `Connect_Click`, `Disconnect`, the timer, or any render path. §10.7 / §11.6 unchanged, and commit 1 touched render call sites.
+6. ⚠️ **D5 and D7 remain unfixed**, still owed as their own commits (§3 rule 2).
+7. ⚠️ **Latency at 115200 baud unmeasured** (§11.8 item 3), **no real serial log** for the `ReplaySensorStream` parity check (§11.8 item 4), **firmware 25/73 confirmation** never done, **physical tilt** never done.
+8. ⚠️ **`EchoEnvironment\Math\` still exists and is empty** — manual `rmdir`, invisible to git and to solution-file listings (§9.8).
+9. **`MainWindow.xaml.cs` is 593 lines**, not < 200. Phase 6b.
+10. **`TreatWarningsAsErrors` still has not bitten at Phase 5.** §7.3 predicted it would; five projects built clean, 0 warnings, including the new one. The prediction remains untested rather than disproved — it may still bite when XAML is touched in 5c.

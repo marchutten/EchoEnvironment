@@ -15,6 +15,14 @@
     -->
     <ProjectReference Include="..\EchoEnvironment.Core\EchoEnvironment.Core.csproj" />
     <ProjectReference Include="..\EchoEnvironment.Hardware\EchoEnvironment.Hardware.csproj" />
+    <!--
+      Phase 5: the App no longer builds any geometry itself. MeshFactory, ScenePrimitives and
+      WpfMath moved to EchoEnvironment.Rendering, so the App now depends on Rendering and reaches
+      Core through it. The App keeps its own direct Core reference because MainWindow still names
+      SensorFrame, OrientationFilter and ColorScale directly - removing that edge is Phase 6b's job,
+      not a side effect of this move.
+    -->
+    <ProjectReference Include="..\EchoEnvironment.Rendering\EchoEnvironment.Rendering.csproj" />
   </ItemGroup>
 
 </Project>

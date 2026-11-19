@@ -6,6 +6,7 @@ using System.Windows.Media.Media3D;
 using System.Windows.Threading;
 using EchoEnvironment.Core;
 using EchoEnvironment.Hardware;
+using EchoEnvironment.Rendering;
 
 namespace EchoEnvironment
 {
@@ -17,7 +18,9 @@ namespace EchoEnvironment
         private const double FieldOfViewDegrees = 45.0;
         private const double MaxDistanceMm = 4000.0;
         private const double MinDistanceMm = 20.0;
-        private const double LineHalfWidth = 0.0005;
+
+        // LineHalfWidth moved to ScenePrimitives with AddLine: it is the thickness of a drawn line,
+        // which is a rendering constant, not something the window needs to know.
         private const double SceneUnitsPerMm = 1.0 / 1000.0;
 
         private readonly Model3DGroup _boardGroup = new();
@@ -26,8 +29,8 @@ namespace EchoEnvironment
         private readonly OrientationFilter _imuFilter = new();
         private long _lastImuTimestamp;
         private readonly List<GeometryModel3D> _zoneModels = [];
-        private readonly MeshGeometry3D _cubeMesh = CreateCubeMesh(0.02);
-        private readonly GeometryModel3D _lineModel = CreateLineModel();
+        private readonly MeshGeometry3D _cubeMesh = MeshFactory.CreateCubeMesh(0.02);
+        private readonly GeometryModel3D _lineModel = MeshFactory.CreateLineModel();
         private const string DefaultPort = "COM12";
         private ISensorStream? _stream;
 
@@ -44,7 +47,7 @@ namespace EchoEnvironment
         private readonly Model3DGroup _mapGroup = new();
         private readonly GeometryModel3D[] _mapModels = new GeometryModel3D[MapBuckets];
         private long _lastMapRender;
-        private readonly GeometryModel3D _gridModel = CreateGridModel(3.98, 0.5);
+        private readonly GeometryModel3D _gridModel = MeshFactory.CreateGridModel(3.98, 0.5);
 
         // Phase 4 (defect D2): frames arrive on the transport thread and are drained by this timer on
         // the UI thread, one per tick. The rate is a declared setting in the toolbar, so frame rate is
@@ -59,11 +62,11 @@ namespace EchoEnvironment
             InitializeComponent();
 
             var root = new Model3DGroup();
-            root.Children.Add(CreateSensorMarker());
+            root.Children.Add(MeshFactory.CreateSensorMarker());
             _points.Transform = CreateViewTransform(false);
             for (int b = 0; b < MapBuckets; b++)
             {
-                var material = new DiffuseMaterial(new SolidColorBrush(DistanceColor(b * MaxDistanceMm / (MapBuckets - 1))));
+                var material = new DiffuseMaterial(new SolidColorBrush(ColorScale.For(b * MaxDistanceMm / (MapBuckets - 1), MaxDistanceMm).ToColor()));
                 _mapModels[b] = new GeometryModel3D { Material = material, BackMaterial = material };
                 _mapGroup.Children.Add(_mapModels[b]);
             }
@@ -71,14 +74,16 @@ namespace EchoEnvironment
             root.Children.Add(_mapGroup);
             root.Children.Add(_points);
             // Added last: WPF blends transparent models over what was drawn before, so it must not come first.
-            root.Children.Add(CreateReferenceSphere(4.0));
+            // Phase 5c replaces this positional rule with named layers; until then the comment is the
+            // only thing recording why the order is not free.
+            root.Children.Add(MeshFactory.CreateReferenceSphere(4.0));
             SensorVisual.Content = root;
 
             var boardRoot = new Model3DGroup();
-            boardRoot.Children.Add(CreateWorldAxes());
+            boardRoot.Children.Add(ScenePrimitives.CreateWorldAxes());
             _boardGroup.Transform = CreateViewTransform(true);
-            _boardGroup.Children.Add(CreateBoardModel());
-            AddAxes(_boardGroup, 0.5, 0.01);
+            _boardGroup.Children.Add(MeshFactory.CreateBoardModel());
+            ScenePrimitives.AddAxes(_boardGroup, 0.5, 0.01);
             boardRoot.Children.Add(_boardGroup);
             BoardVisual.Content = boardRoot;
 
@@ -439,7 +444,7 @@ namespace EchoEnvironment
                 var cell = (Border)HeatGrid.Children[i];
                 int mm = distances[i];
                 bool valid = mm >= MinDistanceMm && mm <= MaxDistanceMm;
-                cell.Background = new SolidColorBrush(valid ? DistanceColor(mm) : Color.FromRgb(50, 50, 50));
+                cell.Background = new SolidColorBrush(valid ? ColorScale.For(mm, MaxDistanceMm).ToColor() : Color.FromRgb(50, 50, 50));
                 ((TextBlock)cell.Child).Text = valid ? mm.ToString() : "-";
             }
         }
@@ -480,8 +485,8 @@ namespace EchoEnvironment
                         -r * Math.Cos(el) * Math.Cos(az));
 
                     model.Transform = new TranslateTransform3D(position);
-                    ((DiffuseMaterial)model.Material).Brush = new SolidColorBrush(DistanceColor(mm));
-                    AddLine(lines, position);
+                    ((DiffuseMaterial)model.Material).Brush = new SolidColorBrush(ColorScale.For(mm, MaxDistanceMm).ToColor());
+                    ScenePrimitives.AddLine(lines, position);
                     if (keepMap)
                     {
                         AddToMap(viewMatrix.Transform(new Point3D(position.X, position.Y, position.Z)), mm);
@@ -567,31 +572,6 @@ namespace EchoEnvironment
             }
         }
 
-        // WPF 3D has no line primitive, so each line is two crossed thin quads.
-        private static void AddLine(MeshGeometry3D mesh, Vector3D end)
-        {
-            Vector3D dir = end;
-            dir.Normalize();
-            Vector3D side = Vector3D.CrossProduct(dir, Math.Abs(dir.Y) > 0.99 ? new Vector3D(1, 0, 0) : new Vector3D(0, 1, 0));
-            side.Normalize();
-            Vector3D up = Vector3D.CrossProduct(dir, side);
-            up.Normalize();
-
-            foreach (Vector3D offset in new[] { side * LineHalfWidth, up * LineHalfWidth })
-            {
-                int i = mesh.Positions.Count;
-                mesh.Positions.Add(new Point3D(-offset.X, -offset.Y, -offset.Z));
-                mesh.Positions.Add(new Point3D(offset.X, offset.Y, offset.Z));
-                mesh.Positions.Add(new Point3D(end.X + offset.X, end.Y + offset.Y, end.Z + offset.Z));
-                mesh.Positions.Add(new Point3D(end.X - offset.X, end.Y - offset.Y, end.Z - offset.Z));
-                int[] tri = [0, 1, 2, 0, 2, 3];
-                foreach (int t in tri)
-                {
-                    mesh.TriangleIndices.Add(i + t);
-                }
-            }
-        }
-
         private void EnsureZoneModels(int count)
         {
             if (_zoneModels.Count == count)
@@ -611,217 +591,5 @@ namespace EchoEnvironment
             }
         }
 
-        private static Color DistanceColor(double mm)
-        {
-            double t = Math.Clamp(mm / MaxDistanceMm, 0, 1);
-            byte r = (byte)(255 * (1 - t));
-            byte b = (byte)(255 * t);
-            return Color.FromRgb(r, (byte)(200 * (1 - Math.Abs(2 * t - 1))), b);
-        }
-
-        private static MeshGeometry3D CreateBoxMesh(Point3D center, double sx, double sy, double sz)
-        {
-            MeshGeometry3D unit = CreateCubeMesh(1.0);
-            var mesh = new MeshGeometry3D();
-            foreach (Point3D p in unit.Positions)
-            {
-                mesh.Positions.Add(new Point3D(center.X + p.X * sx, center.Y + p.Y * sy, center.Z + p.Z * sz));
-            }
-
-            foreach (int i in unit.TriangleIndices)
-            {
-                mesh.TriangleIndices.Add(i);
-            }
-
-            mesh.Freeze();
-            return mesh;
-        }
-
-        private static GeometryModel3D CreateColoredBox(Point3D center, double sx, double sy, double sz, Color color)
-        {
-            var material = new DiffuseMaterial(new SolidColorBrush(color));
-            var model = new GeometryModel3D(CreateBoxMesh(center, sx, sy, sz), material) { BackMaterial = material };
-            model.Freeze();
-            return model;
-        }
-
-        private static GeometryModel3D CreateBoardModel()
-        {
-            // Sensor looks along -Z, so the front edge of the board is at -Z.
-            return CreateColoredBox(new Point3D(0, 0, 0), 0.4, 0.03, 0.25, Color.FromRgb(20, 110, 60));
-        }
-
-        private static void AddAxes(Model3DGroup group, double length, double width)
-        {
-            double h = length / 2;
-            group.Children.Add(CreateColoredBox(new Point3D(h, 0, 0), length, width, width, Colors.Red));
-            group.Children.Add(CreateColoredBox(new Point3D(0, 0, -h), width, width, length, Colors.DeepSkyBlue));
-            group.Children.Add(CreateColoredBox(new Point3D(0, h, 0), width, length, width, Colors.LimeGreen));
-            group.Children.Add(CreateAxisLabel("X", new Point3D(length + 0.08, 0, 0), Colors.Red));
-            group.Children.Add(CreateAxisLabel("Y", new Point3D(0, 0, -(length + 0.08)), Colors.DeepSkyBlue));
-            group.Children.Add(CreateAxisLabel("Z", new Point3D(0, length + 0.08, 0), Colors.LimeGreen));
-        }
-
-        private static GeometryModel3D CreateAxisLabel(string text, Point3D center, Color color)
-        {
-            var host = new Grid { Width = 64, Height = 64 };
-            host.Children.Add(new TextBlock
-            {
-                Text = text,
-                FontSize = 52,
-                FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush(color),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            host.Measure(new Size(64, 64));
-            host.Arrange(new Rect(0, 0, 64, 64));
-
-            const double s = 0.06;
-            var mesh = new MeshGeometry3D();
-            mesh.Positions.Add(new Point3D(center.X - s, center.Y - s, center.Z));
-            mesh.Positions.Add(new Point3D(center.X + s, center.Y - s, center.Z));
-            mesh.Positions.Add(new Point3D(center.X + s, center.Y + s, center.Z));
-            mesh.Positions.Add(new Point3D(center.X - s, center.Y + s, center.Z));
-            mesh.TextureCoordinates.Add(new Point(0, 1));
-            mesh.TextureCoordinates.Add(new Point(1, 1));
-            mesh.TextureCoordinates.Add(new Point(1, 0));
-            mesh.TextureCoordinates.Add(new Point(0, 0));
-            foreach (int i in new[] { 0, 1, 2, 0, 2, 3 })
-            {
-                mesh.TriangleIndices.Add(i);
-            }
-
-            var material = new EmissiveMaterial(new VisualBrush(host));
-            return new GeometryModel3D(mesh, material) { BackMaterial = material };
-        }
-
-        private static Model3DGroup CreateWorldAxes()
-        {
-            var group = new Model3DGroup();
-            double length = 1.5;
-            double h = length / 2;
-            group.Children.Add(CreateColoredBox(new Point3D(h, 0, 0), length, 0.004, 0.004, Color.FromRgb(120, 40, 40)));
-            group.Children.Add(CreateColoredBox(new Point3D(0, h, 0), 0.004, length, 0.004, Color.FromRgb(40, 120, 40)));
-            group.Children.Add(CreateColoredBox(new Point3D(0, 0, h), 0.004, 0.004, length, Color.FromRgb(40, 80, 120)));
-            return group;
-        }
-
-        // Horizontal raster at z = 0 (WPF Y = 0), fixed in the world so it stays visible at any zoom.
-        private static GeometryModel3D CreateGridModel(double extent, double spacing)
-        {
-            const double half = 0.003;
-            var mesh = new MeshGeometry3D();
-            int lines = (int)Math.Round(extent / spacing);
-
-            void AddFlatQuad(double x0, double z0, double x1, double z1)
-            {
-                int i = mesh.Positions.Count;
-                mesh.Positions.Add(new Point3D(x0, 0, z0));
-                mesh.Positions.Add(new Point3D(x1, 0, z0));
-                mesh.Positions.Add(new Point3D(x1, 0, z1));
-                mesh.Positions.Add(new Point3D(x0, 0, z1));
-                foreach (int t in new[] { 0, 1, 2, 0, 2, 3 })
-                {
-                    mesh.TriangleIndices.Add(i + t);
-                }
-            }
-
-            for (int n = -lines; n <= lines; n++)
-            {
-                double c = n * spacing;
-                double w = Math.Sqrt(extent * extent - c * c);
-                AddFlatQuad(c - half, -w, c + half, w);
-                AddFlatQuad(-w, c - half, w, c + half);
-            }
-
-            var material = new EmissiveMaterial(new SolidColorBrush(Color.FromRgb(90, 110, 130)));
-            var model = new GeometryModel3D(mesh, material) { BackMaterial = material };
-            model.Freeze();
-            return model;
-        }
-        private static GeometryModel3D CreateLineModel()
-        {
-            var material = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(200, 200, 200)));
-            return new GeometryModel3D { Material = material, BackMaterial = material };
-        }
-
-        private static GeometryModel3D CreateSensorMarker()
-        {
-            var material = new DiffuseMaterial(Brushes.Orange);
-            var model = new GeometryModel3D(CreateCubeMesh(0.015), material) { BackMaterial = material };
-            model.Freeze();
-            return model;
-        }
-
-        private static GeometryModel3D CreateReferenceSphere(double radius)
-        {
-            var mesh = new MeshGeometry3D();
-            const int rings = 12;
-            const int segments = 24;
-
-            for (int i = 0; i <= rings; i++)
-            {
-                double phi = Math.PI * i / rings;
-                for (int j = 0; j <= segments; j++)
-                {
-                    double theta = 2 * Math.PI * j / segments;
-                    mesh.Positions.Add(new Point3D(
-                        radius * Math.Sin(phi) * Math.Cos(theta),
-                        radius * Math.Cos(phi),
-                        radius * Math.Sin(phi) * Math.Sin(theta)));
-                }
-            }
-
-            for (int i = 0; i < rings; i++)
-            {
-                for (int j = 0; j < segments; j++)
-                {
-                    int a = i * (segments + 1) + j;
-                    int b = a + segments + 1;
-                    mesh.TriangleIndices.Add(a);
-                    mesh.TriangleIndices.Add(b);
-                    mesh.TriangleIndices.Add(a + 1);
-                    mesh.TriangleIndices.Add(a + 1);
-                    mesh.TriangleIndices.Add(b);
-                    mesh.TriangleIndices.Add(b + 1);
-                }
-            }
-
-            var brush = new SolidColorBrush(Color.FromArgb(28, 120, 160, 255));
-            var material = new DiffuseMaterial(brush);
-            var model = new GeometryModel3D(mesh, material) { BackMaterial = material };
-            model.Freeze();
-            return model;
-        }
-
-        private static MeshGeometry3D CreateCubeMesh(double size)
-        {
-            double h = size / 2;
-            var mesh = new MeshGeometry3D();
-            Point3D[] p =
-            [
-                new(-h, -h, -h), new(h, -h, -h), new(h, h, -h), new(-h, h, -h),
-                new(-h, -h, h), new(h, -h, h), new(h, h, h), new(-h, h, h)
-            ];
-            foreach (Point3D point in p)
-            {
-                mesh.Positions.Add(point);
-            }
-
-            int[] tri =
-            [
-                0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7,
-                0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2,
-                1, 2, 6, 1, 6, 5, 0, 4, 7, 0, 7, 3
-            ];
-            foreach (int i in tri)
-            {
-                mesh.TriangleIndices.Add(i);
-            }
-
-            mesh.Freeze();
-            return mesh;
-        }
     }
 }

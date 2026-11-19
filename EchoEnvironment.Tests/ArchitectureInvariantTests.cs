@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Windows.Media.Media3D;
 using EchoEnvironment.Core;
 using Xunit;
+using EchoEnvironment.Rendering;
 
 namespace EchoEnvironment.Tests;
 
@@ -114,43 +115,67 @@ public class ArchitectureInvariantTests
         Assert.Equal(typeof(Mat3), current.PropertyType);
     }
 
+    /// <summary>
+    /// The adapter must stay a single, findable boundary. If a second conversion point appears,
+    /// "Core has no WPF" stops being a structural fact and becomes something to remember.
+    ///
+    /// RETARGETED at Phase 5 — and the plan's reason for retargeting it is wrong. MIGRATION_PLAN 5e
+    /// predicts that leaving this guard alone makes it "keep inspecting the App assembly, find no
+    /// WPF-typed public types there, and pass for the wrong reason." It does not. The previous body
+    /// asserted Contains(typeof(WpfMath), appTypes), and WpfMath left the App assembly in this commit,
+    /// so the untouched guard fails loudly rather than silently. The retarget is still required, for a
+    /// different reason: the rule the guard was meant to state was never stated by it.
+    ///
+    /// The old rule — "only WpfMath and UI types may expose WPF types" — cannot survive Phase 5,
+    /// because Rendering's entire job is exposing WPF types. MeshFactory.CreateCubeMesh returns
+    /// MeshGeometry3D; that is the design working, not a hole. What has to stay confined is the
+    /// conversion itself: a public signature that names Core and WPF in the same breath. That is the
+    /// narrower rule, it is still falsifiable, and it is the one this guard now enforces.
+    /// </summary>
     [Fact]
     public void WpfConversionIsConfinedToOneType()
     {
-        // The adapter must stay a single, findable boundary. If a second conversion point appears,
-        // "Core has no WPF" stops being a structural fact and becomes something to remember.
-        //
-        // Allowed to cross the boundary: WpfMath (the adapter) and anything that IS a WPF type
-        // already, i.e. the UI itself. Everything else is a new hole.
-        Type[] appTypes = typeof(MainWindow).Assembly.GetTypes()
-            .Where(t => t.IsPublic && t.Namespace == "EchoEnvironment")
+        // The adapter now lives in EchoEnvironment.Rendering, so the guard inspects that assembly.
+        Assert.Equal("EchoEnvironment.Rendering", typeof(WpfMath).Assembly.GetName().Name);
+        Assert.True(HasWpfSignature(typeof(WpfMath)), "WpfMath is expected to expose WPF types.");
+        Assert.True(HasCoreSignature(typeof(WpfMath)), "WpfMath is expected to expose Core types; it is the conversion point.");
+
+        // App and Rendering together, because Phase 5 split the UI across both. Core is deliberately
+        // not scanned: Core speaking Core is not a conversion.
+        Type[] boundaryTypes = typeof(MainWindow).Assembly.GetTypes()
+            .Concat(typeof(WpfMath).Assembly.GetTypes())
+            .Where(t => t.IsPublic && t.Namespace is not null
+                && t.Namespace.StartsWith("EchoEnvironment", StringComparison.Ordinal))
             .ToArray();
 
-        Assert.True(appTypes.Length > 0, "no public types found in the App assembly.");
+        Assert.True(boundaryTypes.Length > 0, "no public types found in the App or Rendering assemblies.");
 
-        Assert.Contains(typeof(WpfMath), appTypes);
-        Assert.True(HasWpfSignature(typeof(WpfMath)), "WpfMath is expected to expose WPF types.");
-
-        foreach (Type type in appTypes)
+        foreach (Type type in boundaryTypes)
         {
-            if (!HasWpfSignature(type))
+            // A type that speaks only WPF is a rendering type or the UI itself. A type that speaks
+            // only Core is domain code. Neither one converts anything.
+            if (!HasWpfSignature(type) || !HasCoreSignature(type))
             {
                 continue;
             }
 
+            // The adapter is the permitted conversion point, so it is exempt by name. Without this
+            // clause the guard fails on the very type it exists to protect: WpfMath speaks Core and
+            // WPF in the same signature, which is its job.
             if (type == typeof(WpfMath))
             {
                 continue;
             }
 
-            // A Window or an Application is allowed to speak WPF: it is the UI.
+            // A Window or an Application is allowed to speak both: it is the UI, and the UI is where
+            // the two finally meet.
             if (typeof(System.Windows.Window).IsAssignableFrom(type)
                 || typeof(System.Windows.Application).IsAssignableFrom(type))
             {
                 continue;
             }
 
-            Assert.Fail($"{type.FullName} crosses the Core/WPF boundary but is neither WpfMath nor a UI type.");
+            Assert.Fail($"{type.FullName} converts Core to WPF but is neither WpfMath nor a UI type.");
         }
     }
 
@@ -186,6 +211,30 @@ public class ArchitectureInvariantTests
 
     private static bool IsWpfAssembly(Type type) =>
         WpfAssemblies.Contains(type.Assembly.GetName().Name);
+
+    /// <summary>
+    /// True when a type's public surface names a type from EchoEnvironment.Core. Read together with
+    /// HasWpfSignature it states the Phase 5 rule: a type may speak WPF (Rendering does, everywhere),
+    /// and a type may speak Core (Core does), but only WpfMath may speak both in the same signature.
+    /// </summary>
+    private static bool HasCoreSignature(Type type)
+    {
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static;
+
+        bool returnType = type.GetMethods(flags)
+            .Any(m => IsCoreAssembly(m.ReturnType));
+
+        bool parameterType = type.GetMethods(flags)
+            .Any(m => m.GetParameters().Any(p => IsCoreAssembly(p.ParameterType)));
+
+        bool propertyType = type.GetProperties(flags)
+            .Any(p => IsCoreAssembly(p.PropertyType));
+
+        return returnType || parameterType || propertyType;
+    }
+
+    private static bool IsCoreAssembly(Type type) =>
+        type.Assembly.GetName().Name == "EchoEnvironment.Core";
 
     // ------------------------------------------------------------------
     // Phase 3 guards. Same shape as the Phase 2 guards: read the compiled
@@ -248,5 +297,85 @@ public class ArchitectureInvariantTests
 
         // And the seam it replaced must actually be there.
         Assert.Contains("EchoEnvironment.Hardware", referenced);
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 5 guards. EchoEnvironment.Rendering now exists, which adds an edge
+    // the plan's dependency graph forbids and nothing in the graph itself
+    // prevents: Rendering reaching back into the App.
+    // HardwareAssemblyReferencesNothingButCore already names Rendering in its ban
+    // list — it was written in Phase 3 for exactly this moment — so these are the
+    // guards that exist because the assembly is now real rather than predicted.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Rendering may see Core and WPF, and no other assembly in this solution.
+    ///
+    /// The positive half is what makes this falsifiable rather than a shape check: Rendering must
+    /// reference PresentationCore, because producing WPF visuals is the entire reason it exists. If
+    /// someone re-declares it as plain net10.0, every factory in it stops compiling and this guard is
+    /// the message that explains why.
+    /// </summary>
+    [Fact]
+    public void RenderingAssemblyReferencesCoreAndNoOtherSolutionAssembly()
+    {
+        Assembly rendering = typeof(WpfMath).Assembly;
+        Assert.Equal("EchoEnvironment.Rendering", rendering.GetName().Name);
+
+        string[] referenced = rendering
+            .GetReferencedAssemblies()
+            .Select(name => name.Name ?? string.Empty)
+            .ToArray();
+
+        Assert.Contains("EchoEnvironment.Core", referenced);
+        Assert.Contains("PresentationCore", referenced);
+
+        Assert.All(referenced, name =>
+        {
+            if (name.StartsWith("EchoEnvironment", StringComparison.Ordinal))
+            {
+                Assert.NotEqual("EchoEnvironment", name);
+                Assert.NotEqual("EchoEnvironment.Tests", name);
+                Assert.NotEqual("EchoEnvironment.Hardware", name);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Core must not be able to name Rendering. The dependency is one-directional by design:
+    /// Rendering turns Core values into WPF visuals, so a Core type reaching into Rendering would
+    /// drag PresentationCore into the assembly whose whole purpose is staying free of it.
+    /// CoreAssemblyReferencesNoWpfAssembly catches that consequence; this catches the cause.
+    /// </summary>
+    [Fact]
+    public void CoreAssemblyDoesNotReferenceRendering()
+    {
+        string[] referenced = typeof(OrientationFilter).Assembly
+            .GetReferencedAssemblies()
+            .Select(name => name.Name ?? string.Empty)
+            .ToArray();
+
+        Assert.DoesNotContain("EchoEnvironment.Rendering", referenced);
+    }
+
+    /// <summary>
+    /// The colour ramp moved to Core at Phase 5 so it could be tested without a UI. That only holds
+    /// while the ramp's own signature is WPF-free: the moment ColorScale.For returns
+    /// System.Windows.Media.Color the ramp is untestable headlessly again and the reason it was moved
+    /// is gone. MIGRATION_PLAN 5 asks for this member in Core without noticing that its old return
+    /// type is a PresentationCore type, so the split — arithmetic in Core, Color construction in
+    /// WpfMath — is what this guard pins.
+    /// </summary>
+    [Fact]
+    public void ColorScaleRampIsInCore_AndIsWpfFree()
+    {
+        Assert.Equal("EchoEnvironment.Core", typeof(ColorScale).Assembly.GetName().Name);
+
+        MethodInfo ramp = typeof(ColorScale).GetMethod("For")!;
+        Assert.Equal("EchoEnvironment.Core", ramp.ReturnType.Assembly.GetName().Name);
+
+        Assert.All(ramp.GetParameters(), parameter =>
+            Assert.False(IsWpfAssembly(parameter.ParameterType),
+                $"ColorScale.For parameter '{parameter.Name}' is {parameter.ParameterType.FullName}; the ramp must stay testable without a UI."));
     }
 }

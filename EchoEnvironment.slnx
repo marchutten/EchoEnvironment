@@ -5,5 +5,6 @@
   </Folder>
   <Project Path="EchoEnvironment.Core/EchoEnvironment.Core.csproj" />
   <Project Path="EchoEnvironment.Hardware/EchoEnvironment.Hardware.csproj" />
+  <Project Path="EchoEnvironment.Rendering/EchoEnvironment.Rendering.csproj" />
   <Project Path="EchoEnvironment.Tests/EchoEnvironment.Tests.csproj" />
 </Solution>

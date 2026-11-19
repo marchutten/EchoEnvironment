@@ -1,6 +1,7 @@
 ﻿using System.Windows.Media.Media3D;
 using EchoEnvironment.Core;
 using Xunit;
+using EchoEnvironment.Rendering;
 
 namespace EchoEnvironment.Tests;
 

@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Phase 5 (MIGRATION_PLAN 5): net10.0-windows + UseWPF, deliberately. This layer's whole job is
+      to turn Core's WPF-free domain values into WPF visuals, so it must see PresentationCore.
+
+      The asymmetry is the point. Core may not see this assembly, and nothing here may name the App:
+      ArchitectureInvariantTests enforces both directions from the compiled artifacts, because a
+      comment in this ItemGroup is not a dependency rule.
+    -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>EchoEnvironment.Rendering</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EchoEnvironment.Core\EchoEnvironment.Core.csproj" />
+  </ItemGroup>
+
+</Project>

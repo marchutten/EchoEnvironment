@@ -24,10 +24,13 @@
       Direct reference to Hardware: LineFramer and the three ISensorStream implementations (Phase 3).
       These tests need nothing WPF; they live here rather than in a separate Hardware.Tests project
       because the plan keeps one test project (§1 target graph: Tests -> Core, Hardware, Rendering).
-      Reference to the App: WpfMath and MainWindow's angle expressions.
+      Reference to the App: MainWindow's angle expressions and the render-rate guards.
+      Reference to Rendering (Phase 5): WpfMath moved here from the App, and the mesh/scene factories
+      live here, so the boundary guards and the geometry tests now inspect this assembly.
     -->
     <ProjectReference Include="..\EchoEnvironment.Core\EchoEnvironment.Core.csproj" />
     <ProjectReference Include="..\EchoEnvironment.Hardware\EchoEnvironment.Hardware.csproj" />
+    <ProjectReference Include="..\EchoEnvironment.Rendering\EchoEnvironment.Rendering.csproj" />
     <ProjectReference Include="..\EchoEnvironment\EchoEnvironment.csproj" />
   </ItemGroup>
 
