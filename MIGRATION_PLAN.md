@@ -637,7 +637,9 @@ Two compile errors were also needed on the way: `nameof(FlatFacingNorth)` and fr
 
 **§9.5's prediction was wrong in one respect:** it forecast ~135 tests; the real count is **130**. The estimate double-counted the `WpfMathTests` theory expansion. The useful half of the prediction held: the count was nowhere near 117, and nothing was skipped, so Core loaded and the un-skip took.
 
-**Also confirmed independently:** `EchoEnvironment.Core` builds standalone with zero messages, i.e. Core genuinely compiles WPF-free. Note that the solution overview still reports only 2 projects even though Core resolves for build and reference — the overview is not a reliable indicator of what is actually loaded, and neither is the `.slnx` file on disk. Trust the build.
+**Also confirmed:** in one run, `EchoEnvironment.Core` could be targeted for a build directly and succeeded with zero messages — i.e. Core genuinely compiles WPF-free. In a later run it could not be targeted by name at all. Do not rely on that route. The durable evidence is the passing `CoreAssemblyReferencesNoWpfAssembly` guard, plus the fact that the App builds clean while consuming `Mat3`/`Vec3`: Core must have compiled for that to happen.
+
+Note also that the solution overview reported only 2 projects in **every** run, including the green ones, even though Core resolved for build and for both `ProjectReference`s. The overview is not a reliable indicator of what is actually loaded, and neither is the `.slnx` on disk. Trust the build and the test count.
 
 ### 9.5 Standing facts after verification
 
