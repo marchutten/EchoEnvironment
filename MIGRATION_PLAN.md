@@ -1358,3 +1358,13 @@ commit 2's rewiring (checkbox→renderer→map) is demonstrated working on live 
 suite covers. **Save this capture as `docs/baseline/pre-phase5-connected.png`**: it is the only connected-state
 reference that exists, and Phase 5c/5d are about to change brushes, layers and axis labels — i.e. exactly
 what this image shows.
+
+---
+
+## 13. Session handoff
+
+§12.10 is where the work stopped. For a new session, **read `SESSION_HANDOFF.md` in the repo root first**: it
+records HEAD, build/test state, what 5c covers, the two decisions to make before writing any code, and —
+separately — what is **UNVERIFIED** (5a and 5b have never been visually confirmed; a crash reported after 5a
+was never attributed). Keep this file current at each session boundary; it is the only durable memory of this
+migration, because there is no knowledge base in the repo to search.
