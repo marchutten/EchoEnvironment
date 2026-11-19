@@ -1,5 +1,8 @@
-﻿<Solution>
+<Solution>
   <Project Path="EchoEnvironment/EchoEnvironment.csproj" />
+  <Folder Name="/Solution/">
+    <File Path="MIGRATION_PLAN.md" />
+  </Folder>
   <Project Path="EchoEnvironment.Core/EchoEnvironment.Core.csproj" />
   <Project Path="EchoEnvironment.Tests/EchoEnvironment.Tests.csproj" />
 </Solution>
