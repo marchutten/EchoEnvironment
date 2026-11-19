@@ -1,8 +1,8 @@
 ﻿# EchoEnvironment — Migration Plan
 
-**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** the Phase 3 commit recorded in §10, **14 commits ahead** of `origin/main`, **working tree clean** — Phase 3 is committed. Solution builds 0 errors / 0 warnings across **four** projects; 181 tests pass.
-**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · **3 ✅ code complete, gate PARTIALLY closed (§10)** · 4–7 pending.
-**Test suite:** **181 tests, 181 passed, 0 failed, 0 skipped** (was 130 before Phase 3).
+**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** the Phase 4 commit `f6a75a5`, **16 commits ahead** of `origin/main`, **working tree clean** — Phase 4 is committed. Solution builds 0 errors / 0 warnings across **four** projects **in Debug**. ⚠️ **Release has not been verified since Phase 2** (§7.5 closed it for three projects; §10 and §11 both carry it open for the fourth and for Phase 4's changes).
+**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · **4 ✅ code complete, gate PARTIALLY closed (§11)** · 5–7 pending.
+**Test suite:** **193 tests, 193 passed, 0 failed, 0 skipped** (130 before Phase 3, 181 before Phase 4).
 **Goal:** split the 755-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
 
 **Governing rule:** *seam first, then move.* Every phase must leave the app runnable and the build green. No phase may mix a behavior change with a structural move.
@@ -47,6 +47,8 @@ Repo hygiene: `.editorconfig`, `global.json`, `Directory.Build.props`, a .NET `.
 
 **What remains blocking:** `MainWindow` is still 763 lines with 5 responsibilities, and serial I/O is still inline in `Connect_Click` / `Port_DataReceived`.
 
+> ⚠️ **This section describes the tree at `2c81aa2` and is now three phases out of date.** It is kept as the original reading rather than rewritten. Against the current tree: `EchoEnvironment.Hardware` **exists** (Phase 3, §10), `EchoEnvironment.Core` also contains `SensorFrame.cs` (§10.2) and `FrameCoalescer.cs` (Phase 4, §11), `MainWindow.xaml.cs` is **827 lines** (§11.1), the App no longer references `System.IO.Ports` (§10.1), and the suite is 193 tests. Use §10 and §11 for current state.
+
 ---
 
 ## 1. Target layout
@@ -82,6 +84,8 @@ Status after Phase 3: `Tests → Core`, `Tests → Hardware`, `Tests → App`, `
 
 Enforced rule: **`Core` must never reference a `WindowsBase`/`PresentationCore`/`PresentationFramework` type.** If a type needs `Point3D`, it belongs in `Rendering`. This is now enforced by a test, not by convention (§9.5).
 
+> **Phase 4 tested this rule from the other side.** `FrameCoalescer` was placed in **Core** (§11.3 deviation 1) precisely because Core is the assembly that can be tested headlessly. It uses `System.Threading.Channels` and `System.Threading` only, so `CoreAssemblyReferencesNoWpfAssembly` still passes with the new type in place — the guard held without being loosened, which is the evidence that matters.
+
 ### Namespace strategy
 
 | Assembly | Namespace | Rationale |
@@ -103,6 +107,7 @@ Use file-scoped namespaces everywhere (`namespace EchoEnvironment.Core;`) — th
 4. ~~⚠️ `TargetFramework` now lives in `Directory.Build.props` as `net10.0-windows` — inherited by every new project.~~ **✅ FIXED in Phase 2.** `TargetFramework` was **removed** from `Directory.Build.props`; each csproj declares its own, where it is visible and intentional. See §7.4 for why the inherited form was dangerous, and §9.4 item 2 for the guard that now enforces the invariant it was meant to protect. **This gotcha must be re-applied to the new projects:** `EchoEnvironment.Core` is `net10.0`; `Hardware` and `Rendering` must each state `net10.0-windows` explicitly. Do not reintroduce a shared TFM.
 5. **Adding a project to `.slnx` on disk does not make Visual Studio load it.** This bit twice (§8, §9.4) and no automated tool could fix it. When a phase creates a new project, **expect to reload the solution manually** and verify by test count, not by the solution overview.
 6. **`.slnx` project entries are not self-documenting about load state.** `38813e1 "Add plan"` added both `EchoEnvironment.Core` and `EchoEnvironment.Tests` to `EchoEnvironment.slnx` and hung `MIGRATION_PLAN.md` in a `/Solution/` folder. For the whole of Phases 1–2 the `.slnx` on disk listed 3 projects while the solution overview reported 1 or 2. **§9.10 shows the disagreement is a stale-solution symptom, not a permanent property:** after a reopen, the overview reported 3 and all three projects built individually. Still verify by assembly + test count, and still expect the disagreement when Phase 3 adds a fourth project.
+7. **`replace_file_content` is a full overwrite, not a merge.** *Added after Phase 4, when this destroyed `MIGRATION_PLAN.md` outright.* A placeholder written with it replaced all 911 lines. It was recovered from `git show <commit> -- <path>`, which cost two extra steps and produced no diff to review. For partial edits use `replace_file_lines` with `start_line` + `old_lines` from a fresh read. **A plan document that has been maintained across four phases is the worst possible target for a full overwrite** — it has no cheap reconstruction path other than git.
 
 ---
 
@@ -200,6 +205,8 @@ The tests exist to prove that Phases 2–5 changed nothing. Writing them *after*
 **Gate:** tests green against the *current* code. Any test that fails is a real defect — record it, don't paper over it.
 
 > **Refined after Phase 2 (§9.4):** "any test that fails is a real defect" is too strong. Three of Phase 2's four failures were defects **in the tests themselves**, not in the code under test. The working procedure is: before changing production code to satisfy a failure, derive the expected value independently from first principles. If the derivation disagrees with the test, the test is wrong — and fixing it means correcting its *claim*, never loosening its tolerance.
+
+> **Confirmed again in Phase 4 (§11.4):** three of Phase 4's twelve new tests failed on first execution and **all three were test defects**, not defects in the coalescer. The procedure above is what prevented the implementation from being "fixed" to satisfy a wrong assertion.
 
 #### Phase 1 record — ✅ gate PASSED (`8e19f97`); was blocked on §8 until the manual solution reload
 
@@ -373,18 +380,20 @@ public interface ISensorStream : IDisposable {
 
 ---
 
-### Phase 4 — Insert the coalescing stage (2 h) — fixes D2
+### Phase 4 — Insert the coalescing stage (2 h) — fixes D2 — ✅ CODE COMPLETE, gate partially closed, see §11
 
 Today every parsed line becomes its own `Dispatcher.BeginInvoke`, each doing a full frame render. At 115200 baud the producer outruns the UI dispatcher and latency grows without bound.
 
 ```csharp
-// App layer
+// Core layer (see §11.3 deviation 1 — NOT the App layer)
 private static readonly Channel<SensorFrame> Frames =
     Channel.CreateBounded<SensorFrame>(new BoundedChannelOptions(1) {
-        FullMode = BoundedChannelFullMode.DropWrite,   // newest frame wins
+        FullMode = BoundedChannelFullMode.DropOldest,   // newest frame wins
         SingleReader = true, SingleWriter = false
     });
 ```
+
+> ⚠️ **CORRECTED IN PHASE 4 — this line originally read `DropWrite`, and the sketch was a bug.** `DropWrite` discards the item being *written* when the channel is full, so a full one-slot channel keeps the frame it already holds — the **stale** one — and throws away the fresh one. That is the exact opposite of the comment next to it. `DropOldest` is the policy that makes "newest frame wins" true. Implementing the sketch as written would have shipped the wrong behaviour while looking correct in review, because the comment was right and the code was not. Full analysis in §11.2; the guard is `KeepsTheNewestFrame_DiscardsTheStaleOne`.
 
 - Serial callback → `Frames.Writer.TryWrite(frame)` (never blocks, drops stale frames).
 - One `DispatcherTimer` at a **UI-side policy rate** (e.g. 60 Hz) → drains and renders exactly one frame per tick.
@@ -394,6 +403,8 @@ This converts frame rate from a serial-side accident into an explicit, tunable a
 > Depends on Phase 3: `Channel<SensorFrame>` needs `SensorFrame`, which does not exist yet. Phase 3's first step is what makes this compilable.
 
 **Gate:** connect at max baud; UI latency stays flat. Add a frame-drop counter to `StatusText` so the drop policy is visible rather than mysterious.
+
+> **Gate outcome (§11):** clause 2 — the drop counter — ✅ **done**, and `DroppedFramesCountsOnlyCoalescedAwayFrames_NotClearedOnes` pins what the number means. Clause 1 — max-baud latency — ⚠️ **not measured; needs a hardware session.** What *is* proven headlessly is the mechanism that clause 1 depends on: pending never exceeds one slot under a 10 000-frame burst, and `Write` never blocks the producer.
 
 ---
 
@@ -444,6 +455,8 @@ Order becomes a declared property of the design, not an accident of insertion se
 
 > **Prerequisite still not satisfied:** there is still no reference screenshot. Phase 2's visual check was a run-and-look (§9.5), which closes Phase 2's gate but produces no baseline image. Capture one **before** Phase 5 starts, not after — after Phase 5 there is nothing left to compare against, and the whole point of this gate is a diff.
 
+> **Phase 4 changed one input to this phase.** `UpdateFrame` / `UpdateHeatmap` are now called from exactly one place — `RenderFrame`, driven by the render timer — not from a per-frame dispatcher queue. 5a and 5b can therefore measure allocations per *rendered* frame rather than per *received* frame, which is the number that actually matters after Phase 4. The `ToArray()` copies are still there, now inside `RenderFrame` (§11.6).
+
 ---
 
 ### Phase 6 — Thin the App + correctness fix (2 h)
@@ -478,6 +491,8 @@ protected override void OnStartup(StartupEventArgs e) {
 
 > ⚠️ `MainWindow` currently has no constructor taking a view model, and `App.xaml` sets `StartupUri="MainWindow.xaml"`. A composition root in `OnStartup` **conflicts with `StartupUri`** — one of the two must go. Removing `StartupUri` is the correct choice, but it is a change to `App.xaml`, which is XAML and easy to get wrong: keep it in 6c's own commit.
 
+> **Phase 4 added a third thing 6b must absorb:** the render timer, the `FrameCoalescer` instance and the render-rate combo box are currently `MainWindow` state. The *policy* (rate, drop counter) belongs on the view model; the *timer* is a UI-thread mechanism and can stay with the view. Splitting them wrongly is how the rate ends up as a field on a `Window` again.
+
 **Gate:** all tests green, manual checklist against real hardware passes, `--sim` renders.
 
 ---
@@ -485,7 +500,7 @@ protected override void OnStartup(StartupEventArgs e) {
 ### Phase 7 — Optional polish
 
 - Relocate to `src/` + `tests/` (now safe — the architecture is settled).
-- GitHub Actions: `windows-latest`, `dotnet build` + `dotnet test` on push/PR. **Highest-value item in this list now:** 130 tests exist and nothing runs them automatically. A guard that nobody executes is not protection.
+- GitHub Actions: `windows-latest`, `dotnet build` + `dotnet test` on push/PR. **Highest-value item in this list now:** 193 tests exist and nothing runs them automatically. A guard that nobody executes is not protection.
 - README: wiring, serial line format (16 / 25 / 64 / 73 values, separator set, IMU ordering = ITG3200 gyro, BMA180 accel, HMC5883L mag), keyboard/mouse controls, `--sim` / `--replay`.
 - `WorldMap` dirty-bucket incremental rebuild (fixes D4: `RenderMapIfDue` currently rebuilds every bucket mesh every 150 ms; buckets are bounded at 65,341, so worst case is ~500k positions re-emitted per tick).
 - WPF 3D shading: `GeometryModel3D`s built from cubes/lines/map buckets have **no `Normals`**, so they shade inconsistently under the `DirectionalLight`. Add normals or switch those models to `EmissiveMaterial` if lighting isn't wanted.
@@ -499,7 +514,7 @@ Phase 0  hygiene          → makes every later diff contain only code      ✅ 
 Phase 1  tests            → locks CURRENT behavior; must precede all moves ✅ done
 Phase 2  Core extraction  → the keystone; removes the WPF dependency       ✅ done, gate closed
 Phase 3  ISensorStream    → unlocks offline development                    ✅ code complete (§10)
-Phase 4  coalescing       → fixes the throughput ceiling
+Phase 4  coalescing       → fixes the throughput ceiling                   ✅ code complete (§11)
 Phase 5  Rendering        → only now is it safe to touch the visual tree
 Phase 6  ViewModel + D1   → behavior change isolated to its own commit
 Phase 7  polish
@@ -511,6 +526,8 @@ Phase 7  polish
 2. **Never combine Phase 6a (the pitch/roll fix) with a structural move.** A correctness fix buried in a 763-line refactor is unauditable and un-revertable.
 
 **Both rules held through Phase 2.** Rule 2 is the one Phase 3 is most likely to break, because 3d (defects D5 and D7) is a behavior change sitting inside a structural extraction. Apply rule 2 to 3d as well: **separate commits.**
+
+**Phase 4 is itself a behavior change** — D2 is defect removal, not a structural move — so it is its own commit under rule 2, and it is the reason §5's "frame rate is a declared UI setting" criterion moved from unchecked to satisfied in one step.
 
 ---
 
@@ -525,26 +542,28 @@ Phase 7  polish
 | `TreatWarningsAsErrors` breaks the build on generated WPF markup code | Low | Low | Scope it per-project, or revert to warning-only. | ✅ **Did not bite** — 0 warnings across every build through Phase 2, including the test project with xunit analyzers. §7.3's prediction that it would bite at Phase 5 is still untested. |
 | `net10.0` Core accidentally references a WPF type | Medium | High | Add a build-time guard: an analyzer rule or a simple test asserting `typeof(OrientationFilter).Assembly.GetReferencedAssemblies()` contains no `PresentationCore`/`WindowsBase`. | ✅ **Done, and the recommended form was insufficient.** The literal suggestion — assert absence of `PresentationCore`/`WindowsBase` — was implemented first and **passed while asserting nothing**, because `Window`/`Application` live in `PresentationFramework`. See §9.4 item 2. The shipped guard covers all three assemblies from one shared list. |
 | Behavior drift in `LineFramer` (framing bugs = dropped/corrupted frames) | Medium | High | `LineFramer` gets its own test suite in Phase 3a, plus a `ReplaySensorStream` parity check against a real capture. | 🟡 **Half done.** The test suite exists (16 tests) and its centrepiece replays 402 chunks through a verbatim copy of the old MainWindow algorithm, requiring identical lines in identical order and an identical drop count — so 3a's behaviour-neutrality is measured, not asserted. **The parity half is still open:** the parity check needs a **real captured log**, which the repo still does not have. Capture one during a hardware session before trusting `ReplaySensorStream`. See §10.5. |
-| **A test that asserts nothing is mistaken for protection** — *added after Phase 2* | **High** | High | Four such guards were written in Phase 2 and only revealed themselves by failing or by review: a `-windows` substring check that can never fire, a WPF-signature check matching only `WindowsBase`, a namespace filter that omitted `IsPublic`, and a cross-product assertion that was mathematically false. **A green suite is not evidence that the guards assert anything.** Review each guard by asking what would have to change for it to fail; if the answer is "nothing," it is decoration. | 🟡 **Ongoing discipline, not a one-time fix.** Applies to every guard added in Phases 3–6. |
+| **A test that asserts nothing is mistaken for protection** — *added after Phase 2* | **High** | High | Four such guards were written in Phase 2 and only revealed themselves by failing or by review: a `-windows` substring check that can never fire, a WPF-signature check matching only `WindowsBase`, a namespace filter that omitted `IsPublic`, and a cross-product assertion that was mathematically false. **A green suite is not evidence that the guards assert anything.** Review each guard by asking what would have to change for it to fail; if the answer is "nothing," it is decoration. | 🟡 **Ongoing discipline, not a one-time fix — and it recurred immediately in Phase 4.** Two of Phase 4's tests asserted an identity that held *by construction* (`DroppedFrames` is defined as `written − read − cleared − pending`, so any equation built from those four terms is unfalsifiable). Neither was caught by failing; both were caught by re-reading. Replaced with hand-computed expectations. See §11.5. Applies to every guard added in Phases 5–6. |
 | **Solution state is unreliable** — *added after §8 and §9.4, which were the same failure twice* | Medium | Medium | `get_solution_overview` reported 1 project in §8 and 2 projects in every Phase 2 run, including green ones, while the `.slnx` on disk listed 3. Neither the overview nor the `.slnx` on disk proves a project is loaded. **Evidence that a project is loaded: its assembly was produced, and the test count matches expectation.** A test count *lower* than expected means discovery silently skipped something. | ✅ **Diagnosed and confirmed, §9.10.** Reopening the solution made the overview report **3** projects and all three built individually — so the disagreement was a stale in-memory solution, not a property of `.slnx`. The mitigation stands (verify by assembly + test count, expect the disagreement when Phase 3 adds a fourth project), but the fix is known to work: reopen, don't re-diagnose. |
 | **A manual "looks fine" check is mistaken for a pixel comparison** — *added when Phase 2's visual gate closed* | Medium | High | Phase 2's gate asked only that the app "renders identically", and a run-and-look is the right strength for that: a mirrored or transposed `Mat3` is glaring in a 3D view. Phase 5's gate asks for a **pixel diff**, and its changes are subtle by design (brush reuse, transform reuse, named layers, axis relabelling). Recording "I ran it and it looked fine" as satisfying both conflates two different bars. **Capture a reference screenshot before Phase 5 starts**, and state which bar each check actually meets. | ⬜ Open. No reference screenshot exists. Must be done before Phase 5, not after. |
+| **Coalescing hides frames the user expects to see** — *the risk Phase 4 was told to mitigate* | Medium | Medium | §2 Phase 4's own mitigation: "make the drain explicit (`async` read loop + render timer)" and show a drop counter. | 🟡 **Half done (§11).** The drop counter is in `StatusText` and its semantics are pinned by test. The drain is a timer only — no `async` read loop (§11.3 deviation 3) — so the mitigation is partly unimplemented. The residual risk is now *rate*, not *queue*: at 15 Hz the app deliberately shows 1 of 60 frames, and nothing measures whether the user can tell. |
+| **A plan document destroyed by a full-file overwrite** — *added after Phase 4* | Medium | High | `replace_file_content` replaces the whole file; it is not a merge. A 911-line document maintained across four phases has no cheap reconstruction path except git. Use `replace_file_lines` for partial edits, and restore with `git show <commit> -- <path>` rather than re-typing from memory. | ✅ **Recovered, at cost.** `MIGRATION_PLAN.md` was overwritten with a placeholder during Phase 4 and restored from `ba4d61a`. Nothing was lost, but the incident is why §1 gotcha 7 exists. |
 
 ---
 
 ## 5. Acceptance criteria
 
-- [x] `Core` compiles as `net10.0` with zero WPF references (verified by test, not by inspection). **Done in Phase 2.** `CoreAssemblyReferencesNoWpfAssembly` walks the reference graph; a separate guard asserts the assembly's `FrameworkName` has no `Platform=`; a third confines WPF-typed public types to `WpfMath`. All pass.
-- [ ] `MainWindow.xaml.cs` < 200 lines, containing only XAML handlers + input. **Currently 763 lines** — Phase 2 added 5 rather than reducing. Phase 6b.
-- [~] ≥ 40 tests, all passing, covering parser edge cases, filter known-pose, orthonormality invariant, `LineFramer`. **181 tests, 181 passing.** Parser ✅, known-pose ✅, orthonormality ✅, architecture invariants ✅ (not originally listed — added in Phase 2, extended in Phase 3), `LineFramer` ✅ **done in Phase 3 (§10)**.
+- [x] `Core` compiles as `net10.0` with zero WPF references (verified by test, not by inspection). **Done in Phase 2.** `CoreAssemblyReferencesNoWpfAssembly` walks the reference graph; a separate guard asserts the assembly's `FrameworkName` has no `Platform=`; a third confines WPF-typed public types to `WpfMath`. All pass. **Still passes after Phase 4 added `FrameCoalescer` to Core** (§11.3) — the guard was not loosened to accommodate the new type.
+- [ ] `MainWindow.xaml.cs` < 200 lines, containing only XAML handlers + input. **Currently 827 lines** — 763 at Phase 1, 768 after Phase 2, 755 after Phase 3, **827 after Phase 4** (+72). Phase 4 moved *away* from this target, which §2 anticipates by assigning the reduction to Phase 6b; recorded rather than hidden. Phase 6b.
+- [~] ≥ 40 tests, all passing, covering parser edge cases, filter known-pose, orthonormality invariant, `LineFramer`. **193 tests, 193 passing.** Parser ✅, known-pose ✅, orthonormality ✅, architecture invariants ✅ (not originally listed — added in Phase 2, extended in Phases 3 and 4), `LineFramer` ✅ **done in Phase 3 (§10)**, `FrameCoalescer` ✅ **added in Phase 4 (§11)**.
 - [~] App runs with `--sim` and `--replay <file>` — no hardware required. **The two streams now exist** (`SimulatedSensorStream`, `ReplaySensorStream` — Phase 3), **but nothing in the App can select them**: there is no `--sim`, no `--replay`, and `MainWindow` constructs `SerialSensorStream` directly. The seam is built; the composition root is Phase 6c.
 - [~] Pitch/Roll labels verified against a physical tilt, with a regression test. **Regression test exists** (`OrientationAngleMappingTests`, and it is the test that would have failed had the plan's own wrong description of D1 been implemented). **The physical tilt has not been done** — that half is inherently manual and is still the only way to settle which label is wrong in the user's terms. Phase 6a.
 - [ ] Main view and board view use one axis convention. `WorldFrame` now exists as the single source of truth, but `AddAxes` and `CreateWorldAxes` have not yet been rewired to it. Phase 5d.
-- [ ] Frame rate is a declared UI setting, not a baud-rate side effect. Phase 4.
+- [x] Frame rate is a declared UI setting, not a baud-rate side effect. **Done in Phase 4 (§11).** `RenderRateComboBox` in the toolbar offers 15 / 30 / 60 / 120 Hz with 60 Hz as the default, and it drives `DispatcherTimer.Interval` live — the rate can be changed while connected. `Stream_FrameReceived` no longer contains a `Dispatcher.BeginInvoke`. Pinned by `RenderRateIsAUserVisibleSetting_AndFrameReceivedNoLongerMarshalsPerFrame` and `DefaultRenderRateIsThePlannedSixtyHertz`. **Note what is *not* covered:** the choice is visible and enforced, but no measurement shows the app sustaining 60 Hz against real frames (§11.6).
 - [ ] CI builds and tests on every push. Phase 7. Note `.github/copilot-instructions.md` exists but there is no workflow file.
 - [ ] README documents the serial protocol. Phase 7.
-- [x] Git history has one commit per phase with a descriptive message, from `c69881d` onward. **Satisfied** — `c69881d`, `bc4413a`, `f534d57`, `8e19f97`, `8d933b4`, `3daf4b7`, `295d5bf`, `0e08043`.
+- [x] Git history has one commit per phase with a descriptive message, from `c69881d` onward. **Satisfied** — `c69881d`, `bc4413a`, `f534d57`, `8e19f97`, `8d933b4`, `3daf4b7`, `295d5bf`, `0e08043`, … `3288a3d` (Phase 3), `f6a75a5` (Phase 4).
       ~~Squash the `wip`/`ok`/`q` commits~~ — **withdrawn, see §7.1**: those commits are already published on `origin/main`.
-- [x] **The app renders identically after every structural phase.** *Added after Phase 2.* This criterion was stated in the Phase 2 and Phase 5 gates but never listed here, so it could be left unsatisfied without any open checkbox. It is inherently manual, and it is the only check that reaches the register's High/High mirrored-scene risk. **Satisfied for Phase 2** — the app was run after the extraction and renders and behaves correctly (§9.5). Note the bar rises for Phase 5: a run-and-look closes Phase 2's gate but not Phase 5's pixel-compare gate, because Phase 5's changes are subtle by design. Capture a reference screenshot *before* starting Phase 5.
+- [~] **The app renders identically after every structural phase.** *Added after Phase 2.* This criterion was stated in the Phase 2 and Phase 5 gates but never listed here, so it could be left unsatisfied without any open checkbox. It is inherently manual, and it is the only check that reaches the register's High/High mirrored-scene risk. **Satisfied for Phase 2** — the app was run after the extraction and renders and behaves correctly (§9.5). **⚠️ Re-opened and NOT satisfied since Phase 3:** the app has not been run since Phase 3 rewired `MainWindow`'s input path (§10.7), and Phase 4 rewired the frame/render path again. Two consecutive phases with no run in between. Note the bar rises for Phase 5: a run-and-look closes Phase 2's gate but not Phase 5's pixel-compare gate, because Phase 5's changes are subtle by design. Capture a reference screenshot *before* starting Phase 5.
 
 ---
 
@@ -556,7 +575,7 @@ Phase 7  polish
 | 1 Tests first | 2–3 h | 3.5 h | ✅ DONE (`f534d57`, gate `8e19f97`) |
 | 2 Core extraction | 3–4 h | 7.5 h | ✅ DONE, **gate fully closed** (`8d933b4`; automated `295d5bf`, visual §9.5) — ⚠ 2d deferred to Phase 3 |
 | 3 Hardware abstraction | 3 h | 10.5 h | ✅ **CODE COMPLETE** (§10) — gate partially closed: build + 181 tests green, hardware parity and log capture still open |
-| 4 Coalescing stage | 2 h | 12.5 h | pending |
+| 4 Coalescing stage | 2 h | 12.5 h | ✅ **CODE COMPLETE** (§11) — gate **partially** closed: build + 193 tests green, drop counter done; the max-baud latency measurement and a run of the app are still open |
 | 5 Rendering extraction | 3 h | 15.5 h | pending |
 | 6 ViewModel + D1 fix | 2 h | 17.5 h | pending |
 | 7 Polish | 3–4 h | ~20 h | pending |
@@ -564,6 +583,8 @@ Phase 7  polish
 **Minimum viable value is delivered at the end of Phase 2 (~7.5 h) — and Phase 2 is finished, gate closed:** testable domain logic, no WPF dependency, a build that still works, 130 passing tests, and a confirmed-working app. If nothing else is done, the migration has already paid for itself.
 
 Two costs the effort table did not anticipate: the two solution-reload blockers (§8, §9.4) and the four test defects that had to be diagnosed as *test* defects rather than code defects (§9.4). Budget similar overhead for Phase 3's new project. **§9.10 narrows this:** the reload itself is cheap — one reopen — and it is now confirmed to work. The expensive part is *diagnosing* that a reload is needed, which §8 spent a full session on. Do not re-spend that: when a new project appears missing, reopen first and verify by test count.
+
+**Phase 4 spent its 2 h on code and none of it on the gate.** The 2 h estimate was for the coalescer, and it was accurate; what the estimate never accounted for is that the gate's remaining clause needs a device and a run, which no amount of coding time covers. Phases 3 and 4 are now both "code complete, gate open" for the same reason.
 
 ---
 
@@ -641,6 +662,8 @@ Release artifacts confirmed on disk for all three projects:
 **The failure mode this gate was guarding against was exercised and did not occur.** No Release-only warning appeared, so `TreatWarningsAsErrors` had nothing to escalate, and no Release-only analyzer complaint appeared in the test project. Phase 3 can add a fourth project inheriting `TreatWarningsAsErrors` without the §7.5 risk of a Phase 5 rendering change being blamed for a pre-existing Release-only defect.
 
 **Retained as a lesson, not as a to-do:** the earlier conclusion that this was "confirmed impossible with the available tooling" was accurate for the toolset available at the time — that build tool really did expose only `project_name` and `timeout_seconds`. It was a tooling gap, not a plan defect, and it was closed by connecting a second server rather than by rephrasing the request. When a verification step is blocked, record *which* capability is missing; that is what makes it findable later.
+
+> ⚠️ **This gate is open again, and has been since Phase 3.** The closure above covers **three** projects at Phase 2. `EchoEnvironment.Hardware` (Phase 3) and the Phase 4 changes have **never been built in Release** — §10 and §11 both carry it. `dotnet build EchoEnvironment.slnx -c Release` in a terminal is the fix, and it has now survived two phases without being run. "§7.5 closed" is true only of the tree it was run against.
 
 ---
 
@@ -804,7 +827,7 @@ One directory listing reported `EchoEnvironment\Math\` as existing and **empty**
 ### 9.9 Open obligations carried into Phase 3
 
 1. ~~**Visual before/after render comparison for Phase 2**~~ ✅ **DONE** — the app was run after Phase 2 and renders and behaves correctly. What that does and does not prove is recorded in §9.5; Phase 5's stricter pixel-compare bar is still open.
-2. ~~**Release build has never been run**~~ ✅ **DONE** — verified in Release after Phase 2 via `build_configuration_set`: 0 errors / 0 warnings, Release artifacts present for all three projects, and the full 130-test suite green in Release. See §7.5.
+2. ~~**Release build has never been run**~~ ✅ **DONE** — verified in Release after Phase 2 via `build_configuration_set`: 0 errors / 0 warnings, Release artifacts present for all three projects, and the full 130-test suite green in Release. See §7.5. **⚠️ Re-opened by Phase 3 and still open after Phase 4** — the fourth project and Phase 4's changes have never been built in Release (§10, §11).
 3. ~~**`pre-refactor` tag was never created**~~ ✅ **It exists** — `pre-refactor` → `f3475a1` ("Code state before refactor"), the last commit before Phase 0. A better baseline than the `bc4413a` this plan recommended, since `bc4413a` already contains the plan itself.
 4. **Firmware confirmation of the 25/73-value quirk** (§4) has never been done.
 5. **Physical tilt to settle the Pitch/Roll labels** (§5, Phase 6a). The regression test exists; the human verification does not.
@@ -831,9 +854,11 @@ A close-and-reopen of `EchoEnvironment.slnx` was performed after Phase 2's gate 
 
 ## 10. Phase 3 record — code complete, gate **partially** closed ⚠️
 
-**Build:** Debug, whole solution, **0 errors / 0 warnings** across **four** projects. `EchoEnvironment.Hardware\bin\Debug\net10.0-windows\EchoEnvironment.Hardware.dll` was produced and verified on disk (PE headers checked). ⚠️ **Release was NOT verified for Hardware:** `EchoEnvironment.Hardware\bin\Release` and `obj\Release` do not exist, and the available build tool exposes no configuration parameter. §7.5's Release gate was closed for three projects; a **fourth** project now inherits `TreatWarningsAsErrors` and has never been built in Release. Run `dotnet build EchoEnvironment.slnx -c Release` in a terminal before Phase 4.
+**Build:** Debug, whole solution, **0 errors / 0 warnings** across **four** projects. `EchoEnvironment.Hardware\bin\Debug\net10.0-windows\EchoEnvironment.Hardware.dll` was produced and verified on disk (PE headers checked). ⚠️ **Release was NOT verified for Hardware:** `EchoEnvironment.Hardware\bin\Release` and `obj\Release` do not exist, and the available build tool exposes no configuration parameter. §7.5's Release gate was closed for three projects; a **fourth** project now inherits `TreatWarningsAsErrors` and has never been built in Release. Run `dotnet build EchoEnvironment.slnx -c Release` in a terminal before Phase 4."
 **Tests:** **181 total, 181 passed, 0 failed, 0 skipped** (was 130; **+51 new tests**).
 **Gate:** clause 1 (real hardware behaves identically) — **NOT verified, requires a hardware session.** Clause 2 (`ReplaySensorStream` reproduces a captured log frame-for-frame) — **NOT satisfied: the repo still has no capture.** What was substituted is a synthetic log, which proves the class replays a log correctly and proves nothing about the device.
+
+> ⚠️ **The instruction in the Build line — "Run `dotnet build … -c Release` before Phase 4" — was not carried out, before or during Phase 4.** See §11's Build line. The obligation is now two phases old.
 
 ### 10.1 What Phase 3 created
 
@@ -867,7 +892,7 @@ A close-and-reopen of `EchoEnvironment.slnx` was performed after Phase 2's gate 
 
 ### 10.4 Behaviour deliberately preserved (this was a move, not a fix)
 
-- **A terminator is a single `'\n'` OR a single `'\r'`,** so `"\r\n"` yields the line **and then an empty line**. Pinned by `CarriageReturnNewline_YieldsTheLine_AndThenAnEmptyLine` and by the CRLF-vs-LF replay equivalence test. Invisible in the app because blank lines are filtered before the parser. "Fixing" it in 3a would have been the exact drift §4's LineFramer row warns about.
+- **A terminator is a single `'\n'` OR a single `'\r',** so `"\r\n"` yields the line **and then an empty line**. Pinned by `CarriageReturnNewline_YieldsTheLine_AndThenAnEmptyLine` and by the CRLF-vs-LF replay equivalence test. Invisible in the app because blank lines are filtered before the parser. "Fixing" it in 3a would have been the exact drift §4's LineFramer row warns about.
 - **Overflow discards everything unread,** exactly as `_rxBuffer.Clear()` did — now observably.
 - **D5 preserved:** `SerialSensorStream.Open` still constructs and subscribes the `SerialPort` before `Open()`, so a failed `Open()` leaks it. Marked in the source.
 - **D7 preserved:** `ReadTimeout = 1000` is still set and still ignored by `ReadExisting()`.
@@ -909,3 +934,83 @@ The second half of the first guard is what makes it falsifiable in both directio
 5. **Firmware confirmation of the 25/73 quirk** (§4) — still never done.
 6. **Physical tilt to settle the Pitch/Roll labels** (§5, Phase 6a) — still never done.
 7. **Reference screenshot before Phase 5** (§4) — still none.
+
+---
+
+## 11. Phase 4 record — code complete, gate **partially** closed ⚠️
+
+**Build:** Debug, whole solution, **0 errors / 0 warnings** across **four** projects.
+**Tests:** **193 total, 193 passed, 0 failed, 0 skipped** (was 181; **+12 new tests**).
+**Gate:** clause 2 ("add a frame-drop counter to `StatusText` so the drop policy is visible rather than mysterious") — **DONE**. Clause 1 ("connect at max baud; UI latency stays flat") — **NOT VERIFIED, requires a hardware session.** Phase 4 is therefore in the same shape Phase 3 was left in: automated evidence green, the one clause that needs the device open.
+
+⚠️ **Release is still unverified for `EchoEnvironment.Hardware`,** and now also for the Phase 4 changes. §10's instruction to run `dotnet build EchoEnvironment.slnx -c Release` in a terminal was **not carried out before or during Phase 4.** The available build tool exposes no configuration parameter. This obligation has now survived two phases.
+
+### 11.1 What Phase 4 created
+
+| File | Lines | Covers |
+|---|---|---|
+| `EchoEnvironment.Core/FrameCoalescer.cs` | 128 | The coalescing stage: one-slot bounded channel, `Write` / `TryRead` / `Clear` / `Pending` / `Written` / `Read` / `Cleared` / `DroppedFrames`, `CoalescingPolicy` enum |
+| `EchoEnvironment.Tests/FrameCoalescerTests.cs` | 415 | 12 tests: newest-wins, the never-exceeds-one bound under a 10 000-frame burst, one-frame-per-drain, drop-counter semantics, non-blocking producer, 8-writer concurrency, `long` counters, Core placement, UI-setting visibility, default rate |
+| `MainWindow.xaml` +5 | — | `RenderRateComboBox` in the toolbar (15 / 30 / 60 / 120 Hz, default 60) |
+| `MainWindow.xaml.cs` **+92 / −20** | **755 → 827** | `FrameCoalescer` field, `DispatcherTimer`, `RenderTimer_Tick`, `RenderFrame`, `RenderInterval`, `RenderRate_SelectionChanged`, coalescer clear on connect and disconnect, drop counter in `StatusText` |
+
+`Stream_FrameReceived` **no longer contains a `Dispatcher.BeginInvoke`.** It calls `_coalescer.Write(frame)` and returns. The render body moved verbatim into `RenderFrame`, which runs on the UI thread from the timer.
+
+### 11.2 Corrections to the plan's own text — one of them was a real bug in the sketch
+
+> ⚠️ **Line numbers in this document drift.** Sections were inserted at the end and edited in place, so cross-references by line number go stale. §11.2 originally cited "§2 line 384"; the sketch it means is now at line 391. Cross-reference by **section and quoted text**, never by line number.
+**§2 line 384 said `FullMode = BoundedChannelFullMode.DropWrite` with the comment "newest frame wins." Those two contradict each other, and the comment is the correct intent.** `DropWrite` discards the item being *written* when the channel is full, so a full one-slot channel keeps the frame it already holds — the **stale** one — and throws away the fresh one. "Newest frame wins" is `DropOldest`. Implementing the sketch verbatim would have produced the exact opposite of the policy Phase 4 exists to provide, and it would have looked correct in review because the comment said the right thing.
+
+The sketch is corrected in place at §2. `KeepsTheNewestFrame_DiscardsTheStaleOne` is the guard: it writes sequence 1, 2, 3 and requires 3. Under `DropWrite` it would return 1 and fail.
+
+### 11.3 Deviations from the plan's own text
+
+1. **`FrameCoalescer` lives in `EchoEnvironment.Core`, not the App layer** (§2 says "App layer"). D2 is a *behaviour* fix, and Core is the assembly that can be tested headlessly (`net10.0`, no WPF, enforced by `ArchitectureInvariantTests`). A coalescer written as a field of a `Window` could only have been verified by running the app against a sensor — a check the suite does not contain. All 12 tests run without the App. `CoalescingPolicyLivesInCore_NotInTheApp` pins the deviation in both directions: it fails if the type moves to the App **and** if the App stops using it.
+2. **A named `FrameCoalescer` type instead of a raw `Channel<SensorFrame>`.** The gate requires a *drop counter*. `System.Threading.Channels` discards silently and exposes no count, so the gate's clause 2 is not expressible with a bare channel. `FrameCoalescer` wraps a `Channel<SensorFrame>` with the §2 options (`BoundedChannelOptions(1)`, `SingleReader = true`, `SingleWriter = false`) and adds the accounting. The channel is still there; it is not the public surface.
+3. **`DispatcherTimer` instead of an `async` reader loop.** §4's mitigation for the "coalescing hides frames" risk says to "make the drain explicit (`async` read loop + render timer)". Only the timer half was used. A reader loop on the transport thread would have to marshal to the UI thread anyway, which reintroduces the per-frame dispatcher queue D2 is about removing. One timer, one tick, one frame, on the thread that already owns the UI.
+4. **`DroppedFrames` is computed as an identity** (`written − read − cleared − pending`), not incremented at the point of discard, because under `DropOldest` the discard happens inside `TryWrite` and is not observable from outside it. See §11.5 for the trap this created.
+5. **The rate choices are populated in code, not XAML,** so `RenderRateChoices` and `RenderInterval` share one source and `DefaultRenderRateIsThePlannedSixtyHertz` can assert the default against the same array the combo box is built from.
+6. **`_coalescer.Clear()` on both connect and disconnect.** The coalescer outlives the connection; without this, a frame arriving just before the port closed would be rendered by the next connection's first tick. `Clear` is deliberately *not* counted as a drop — a frame discarded because the connection ended is not a frame the policy coalesced away.
+
+### 11.4 Three tests failed on the first run — and all three were test defects, not coalescer defects
+
+This is worth recording because the instinct in each case was to blame the implementation.
+
+1. **`OneFramePerDrain` asserted `Pending == 1` *after* `TryRead`.** A 60-frame burst leaves exactly 1 waiting; the read consumes it; 0 is correct. The assertion that matters — 60 arrivals collapsed to 1 renderable frame — was moved to *before* the read, where it is directly observed instead of inferred.
+2. **`CoalescingPolicyLivesInCore` walked parent directories from `typeof(MainWindow).Assembly.Location`.** `MainWindow.xaml` is not under the App assembly's output directory: the App assembly is copied into the **test** project's `bin`, so the walk from it can never reach the source tree. It failed on the first run.
+3. **The first fix for (2) was also wrong.** It anchored on the App project directory via `AppContext.BaseDirectory`, which only holds because the test project happens to reference the App project — an accident, not a fact about the App. Replaced with `CodeBaseDirectory()`, which anchors on `EchoEnvironment.Tests.csproj` and walks up to the repo root. It now asserts both halves: the type is under `EchoEnvironment.Core/`, **and** `MainWindow.xaml.cs` contains `_coalescer.Write` and does **not** contain a `Dispatcher.BeginInvoke` in the frame-received handler.
+
+### 11.5 Two tests that passed, and were still worthless — caught by review, not by failing
+
+§4's High/High ongoing item says: *"Review each guard by asking what would have to change for it to fail; if the answer is 'nothing,' it is decoration."* That rule caught two of my own Phase 4 tests.
+
+- **`WrittenEqualsReadPlusClearedPlusPendingPlusDropped`** asserted `written == read + cleared + pending + DroppedFrames`. But `DroppedFrames` is **defined** as `written − read − cleared − pending`. The equation held by construction, however wrong the three counters became. It asserted nothing.
+- **`ConcurrentWritersKeepTheBoundAndTheCountersExact`** asserted `written − 1 == DroppedFrames + Pending`. Same flaw, same shape.
+
+Both were replaced with **hand-computed expectations derived from specific sequences**: 40 for the burst case, 1599 for the 8-writer case. Lose a single `Interlocked.Increment` under contention and the concurrency test now reports 1598 and fails. The identity is still documented in `FrameCoalescer`'s comment — with a note that the identity alone proves nothing, and that the value is pinned in tests instead.
+
+### 11.6 Known gaps
+
+- **§10.7's gap is unchanged and is now more relevant:** no test drives `Connect_Click`, `Disconnect`, or the timer wiring. The App's own behaviour is verified only by running it, which **has not been done since Phase 3** — and Phase 4 rewired the frame path again, so the outstanding run obligation now applies to Phase 4's code.
+- **The gate's clause 1 is unmeasured.** "UI latency stays flat at max baud" needs `COM12` at 115200 baud. Nothing in the suite reaches it. What *is* proven headlessly is the mechanism that makes it plausible: the pending backlog never exceeds one frame regardless of arrival rate, and `Write` never blocks the producer.
+- **`MainWindow.xaml.cs` grew by 72 lines** — 755 → 827 — moving *away* from §5's "< 200 lines" criterion. Expected: §2 assigns the reduction to Phase 6b, and Phase 4 adds UI policy the app previously had none of. Recorded rather than hidden.
+- **`frame.Distances.ToArray()` / `frame.Imu.ToArray()` are still there,** now inside `RenderFrame`. Phase 5's job, unchanged.
+- **120 Hz is offered but unmeasured.** The combo box's top choice is above the planned 60 Hz default; nothing demonstrates the app can actually sustain it, because nothing measures frame time.
+- **`SensorFrame.Timestamp` is still consumed by nothing.** Phase 4 had a natural use for it — reporting frame age alongside the drop counter — and did not take it.
+
+### 11.7 What Phase 5 may now assume
+
+Frames reach the UI through exactly one path: `ISensorStream.FrameReceived` → `FrameCoalescer.Write` → `DispatcherTimer.Tick` → `RenderFrame`. Phase 5's rendering extraction can treat `RenderFrame` as the single entry point and does not need to reason about the transport thread at all — the coalescer is the boundary that made that true. `SensorFrame.Timestamp` is still consumed by nothing. The `ToArray()` copies are Phase 5's to remove.
+
+### 11.8 Open obligations carried into Phase 5
+
+1. ⚠️ **Run the app and confirm it behaves identically after Phase 4** — and, still, after Phase 3. This is now the single most important outstanding item: two consecutive phases rewired the input and render paths with no run in between.
+2. ⚠️ **Run `dotnet build EchoEnvironment.slnx -c Release` in a terminal.** Carried from §10, still not done.
+3. ⚠️ **Measure UI latency at 115200 baud** to close Phase 4's gate clause 1.
+4. ⚠️ **Capture a real serial log**, then the `ReplaySensorStream` parity check. Phase 3's gate clause 2, still unsatisfied.
+5. ⚠️ **D5 and D7 are still unfixed** and must be **separate commits** (§3 rule 2).
+6. ⚠️ **`get_solution_overview` still reports 3 projects, not 4.** §9.10's mitigation continues to hold: verify by assembly + test count. The count rose 181 → 193, which is the evidence.
+7. **Firmware confirmation of the 25/73 quirk** (§4) — still never done.
+8. **Physical tilt to settle the Pitch/Roll labels** (§5, Phase 6a) — still never done.
+9. **Reference screenshot before Phase 5** (§4) — still none, and Phase 5 is now next.
+10. **§9.8's empty `EchoEnvironment/Math/` directory** — manual `rmdir EchoEnvironment\Math`, still not done.

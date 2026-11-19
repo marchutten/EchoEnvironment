@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
+using System.Windows.Threading;
 using EchoEnvironment.Core;
 using EchoEnvironment.Hardware;
 
@@ -45,6 +46,14 @@ namespace EchoEnvironment
         private long _lastMapRender;
         private readonly GeometryModel3D _gridModel = CreateGridModel(3.98, 0.5);
 
+        // Phase 4 (defect D2): frames arrive on the transport thread and are drained by this timer on
+        // the UI thread, one per tick. The rate is a declared setting in the toolbar, so frame rate is
+        // a UI decision instead of a consequence of the baud rate.
+        private readonly FrameCoalescer _coalescer = new();
+        private readonly DispatcherTimer _renderTimer = new();
+        private static readonly int[] RenderRateChoices = [15, 30, 60, 120];
+        private const int DefaultRenderRateHz = 60;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -75,6 +84,19 @@ namespace EchoEnvironment
 
             UpdateCamera();
             PreviewKeyDown += Window_PreviewKeyDown;
+
+            // Phase 4: the render rate is a UI policy declared here, not a side effect of how fast
+            // the serial side happens to deliver (defect D2). The combo box is populated in code
+            // rather than in XAML so the numbers and RenderInterval share one source.
+            foreach (int hz in RenderRateChoices)
+            {
+                RenderRateComboBox.Items.Add(hz);
+            }
+
+            RenderRateComboBox.SelectedItem = DefaultRenderRateHz;
+            _renderTimer.Interval = RenderInterval(DefaultRenderRateHz);
+            _renderTimer.Tick += RenderTimer_Tick;
+
             RefreshPorts();
             Closed += (_, _) => Disconnect();
         }
@@ -271,6 +293,8 @@ namespace EchoEnvironment
                 _stream = stream;
                 _imuFilter.Reset();
                 _lastImuTimestamp = 0;
+                _coalescer.Clear();
+                _renderTimer.Start();
                 ConnectButton.Content = "Disconnect";
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
@@ -295,6 +319,12 @@ namespace EchoEnvironment
                 stream.Dispose();
             }
 
+            // Phase 4: the coalescer outlives the connection, so a frame that arrived just before the
+            // port closed would otherwise be rendered by the next tick as if it belonged to the next
+            // connection. Stopping the timer first means nothing drains it on the way out.
+            _renderTimer.Stop();
+            _coalescer.Clear();
+
             ConnectButton.Content = "Connect";
             StatusText.Text = "Disconnected";
         }
@@ -313,30 +343,72 @@ namespace EchoEnvironment
             Dispatcher.BeginInvoke(() => StatusText.Text = $"Rejected line: {rejected}");
         }
 
+        // Phase 4 (defect D2): this no longer marshals. It hands the frame to a one-slot coalescer
+        // and returns, so the transport thread is never queued behind a render and the UI never holds
+        // more than one frame of pending work. The Dispatcher.BeginInvoke that used to sit here is
+        // what made latency grow with frame rate: each frame queued its own full render.
+        // ISensorStream's threading contract still says the consumer marshals — it now does that by
+        // not touching UI state here at all, and by rendering from a timer that already runs on the
+        // UI thread.
         private void Stream_FrameReceived(object? sender, SensorFrame frame)
         {
-            Dispatcher.BeginInvoke(() =>
-            {
-                _frames++;
-                if (frame.HasImu)
-                {
-                    long now = System.Diagnostics.Stopwatch.GetTimestamp();
-                    double dt = _lastImuTimestamp == 0 ? 0 : System.Diagnostics.Stopwatch.GetElapsedTime(_lastImuTimestamp, now).TotalSeconds;
-                    _lastImuTimestamp = now;
-                    SetOrientation(_imuFilter.Update(frame.Imu.ToArray(), dt));
-                }
+            _coalescer.Write(frame);
+        }
 
-                // The two ToArray() copies exist because UpdateFrame and UpdateHeatmap still take
-                // int[]. Retargeting them to ReadOnlyMemory is Phase 5's job; until then the hot
-                // path pays two small allocations per frame, which is what it paid before too.
-                int[] distances = frame.Distances.ToArray();
-                UpdateFrame(distances);
-                ReadOnlySpan<int> imu = frame.Imu.Span;
-                string imuText = frame.HasImu
-                    ? $" | gyro {imu[0]},{imu[1]},{imu[2]} accel {imu[3]},{imu[4]},{imu[5]} mag {imu[6]},{imu[7]},{imu[8]}"
-                    : string.Empty;
-                StatusText.Text = $"Frames: {_frames} ({distances.Length} zones, {distances.Count(d => d >= MinDistanceMm && d <= MaxDistanceMm)} visible, max {distances.Max()} mm){imuText}";
-            });
+        private void RenderTimer_Tick(object? sender, EventArgs e)
+        {
+            // Exactly one frame per tick, which is the whole point: the render rate is a UI policy,
+            // not a consequence of how fast the serial side happens to deliver.
+            if (_coalescer.TryRead(out SensorFrame frame))
+            {
+                RenderFrame(frame);
+            }
+        }
+
+        /// <summary>
+        /// The body that used to run inside Dispatcher.BeginInvoke, unchanged except for where it runs.
+        /// </summary>
+        private void RenderFrame(SensorFrame frame)
+        {
+            _frames++;
+            if (frame.HasImu)
+            {
+                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                double dt = _lastImuTimestamp == 0 ? 0 : System.Diagnostics.Stopwatch.GetElapsedTime(_lastImuTimestamp, now).TotalSeconds;
+                _lastImuTimestamp = now;
+                SetOrientation(_imuFilter.Update(frame.Imu.ToArray(), dt));
+            }
+
+            // The two ToArray() copies exist because UpdateFrame and UpdateHeatmap still take
+            // int[]. Retargeting them to ReadOnlyMemory is Phase 5's job; until then the hot
+            // path pays two small allocations per frame, which is what it paid before too.
+            int[] distances = frame.Distances.ToArray();
+            UpdateFrame(distances);
+            ReadOnlySpan<int> imu = frame.Imu.Span;
+            string imuText = frame.HasImu
+                ? $" | gyro {imu[0]},{imu[1]},{imu[2]} accel {imu[3]},{imu[4]},{imu[5]} mag {imu[6]},{imu[7]},{imu[8]}"
+                : string.Empty;
+
+            // Phase 4's gate: the drop policy must be visible rather than mysterious. Without this
+            // number, a coalescing UI that throws away 40 of 60 frames looks like a stuttering app
+            // with no explanation attached to it.
+            long dropped = _coalescer.DroppedFrames;
+            string dropText = dropped > 0 ? $" | dropped {dropped}" : string.Empty;
+            StatusText.Text = $"Frames: {_frames} ({distances.Length} zones, {distances.Count(d => d >= MinDistanceMm && d <= MaxDistanceMm)} visible, max {distances.Max()} mm){imuText}{dropText}";
+        }
+
+        private static TimeSpan RenderInterval(int hz) => TimeSpan.FromSeconds(1.0 / hz);
+
+        private void RenderRate_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (RenderRateComboBox.SelectedItem is not int hz || hz <= 0)
+            {
+                return;
+            }
+
+            // DispatcherTimer re-reads Interval live; a running timer picks up the new rate on its
+            // next tick, so the rate can be changed while connected.
+            _renderTimer.Interval = RenderInterval(hz);
         }
 
         private void UpdateHeatmap(int[] distances, int size)

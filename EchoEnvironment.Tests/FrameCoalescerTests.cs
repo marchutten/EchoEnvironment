@@ -1,0 +1,415 @@
+﻿using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using EchoEnvironment.Core;
+using Xunit;
+
+namespace EchoEnvironment.Tests;
+
+/// <summary>
+/// Phase 4 tests for defect D2: the coalescing stage between the transport thread and the UI.
+///
+/// D2 was that every parsed line became its own Dispatcher.BeginInvoke, each performing a full frame
+/// render. The pending-render queue therefore grew at the frame arrival rate, and the latency of what
+/// the user saw grew with it. The fix is a hand-off slot that cannot hold more than one frame, so
+/// queue depth is a constant and the render rate becomes a UI decision instead of a baud-rate
+/// consequence.
+///
+/// These tests are the reason FrameCoalescer lives in Core rather than in MainWindow as the plan's
+/// sketch said: a coalescer inside a Window can only be checked by running the app against a sensor at
+/// max baud, which is a hardware-only check and therefore not a test.
+/// </summary>
+public class FrameCoalescerTests
+{
+    private static SensorFrame Frame(int distanceMm) =>
+        new(new[] { distanceMm, distanceMm, distanceMm, distanceMm }, 4, Array.Empty<int>(), false, DateTimeOffset.UnixEpoch);
+
+    // ------------------------------------------------------------------
+    // The drop policy: which frame survives when the producer outruns the UI.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The test that would have failed had Phase 4's sketch been copied verbatim.
+    ///
+    /// The sketch writes FullMode = BoundedChannelFullMode.DropWrite with the comment "newest frame
+    /// wins". Those contradict each other: DropWrite discards the item being WRITTEN, so a full
+    /// channel keeps the frame it already holds — the stale one — and throws away the fresh one.
+    /// "Newest frame wins" is DropOldest. This was chosen by observed behaviour, not by the enum's
+    /// name, and this is the test that pins the choice.
+    /// </summary>
+    [Fact]
+    public void KeepsTheNewestFrame_DiscardsTheStaleOne()
+    {
+        var coalescer = new FrameCoalescer();
+
+        coalescer.Write(Frame(100));
+        coalescer.Write(Frame(200));
+        coalescer.Write(Frame(300));
+
+        Assert.True(coalescer.TryRead(out SensorFrame frame));
+        Assert.Equal(300, frame.Distances.Span[0]);
+        Assert.Equal(2, coalescer.DroppedFrames);
+    }
+
+    /// <summary>
+    /// A capacity-1 channel that ever held two frames would mean the UI can queue work behind a
+    /// render, which is exactly the shape D2 had. Pending is the quantity latency is made of, so its
+    /// bound is asserted directly rather than inferred from the constructor argument.
+    /// </summary>
+    [Fact]
+    public void PendingNeverExceedsOneFrame_RegardlessOfHowFastTheProducerIs()
+    {
+        var coalescer = new FrameCoalescer();
+
+        for (int i = 1; i <= 500; i++)
+        {
+            coalescer.Write(Frame(i));
+            Assert.True(coalescer.Pending <= 1, $"Pending grew to {coalescer.Pending} after {i} writes.");
+        }
+
+        Assert.Equal(1, coalescer.Pending);
+        Assert.Equal(499, coalescer.DroppedFrames);
+    }
+
+    /// <summary>
+    /// The drain side of the same bound: a UI draining at its own policy rate sees exactly one frame
+    /// per drain and never a backlog, no matter how many frames arrived in between.
+    ///
+    /// THE FIRST VERSION OF THIS TEST ASSERTED Pending == 1 AFTER THE READ, AND FAILED. That was a
+    /// misreading of my own policy, not a defect in it: a burst of 60 leaves exactly 1 waiting, and
+    /// the read consumes it, so 0 is the correct value afterwards. The assertion that actually matters
+    /// is the one before the read — 60 arrivals collapsed to 1 renderable frame — so it is asserted
+    /// there instead of being inferred after the fact.
+    /// </summary>
+    [Fact]
+    public void OneFramePerDrain_ArrivalRateDoesNotCreateABacklog()
+    {
+        var coalescer = new FrameCoalescer();
+        int drained = 0;
+
+        for (int tick = 0; tick < 10; tick++)
+        {
+            for (int burst = 0; burst < 60; burst++)
+            {
+                coalescer.Write(Frame(tick * 100 + burst));
+            }
+
+            // 60 arrivals, one renderable frame. This is the whole of D2's fix, measured.
+            Assert.Equal(1, coalescer.Pending);
+
+            Assert.True(coalescer.TryRead(out SensorFrame frame));
+            drained++;
+
+            // The frame that survives a burst is the newest one, not the first one.
+            Assert.Equal(tick * 100 + 59, frame.Distances.Span[0]);
+            Assert.Equal(0, coalescer.Pending);
+        }
+
+        Assert.Equal(10, drained);
+
+        // 600 written, 10 rendered, 590 coalesced away.
+        Assert.Equal(590, coalescer.DroppedFrames);
+    }
+
+    /// <summary>
+    /// The number shown in StatusText must count only frames the policy coalesced away — not frames
+    /// discarded deliberately by Clear, and not frames that were rendered.
+    ///
+    /// THIS TEST WAS FIRST WRITTEN AS AN IDENTITY AND THAT FORM ASSERTED NOTHING. It read
+    /// "written == read + cleared + pending + DroppedFrames", but DroppedFrames is DEFINED as
+    /// written - read - cleared - pending, so the equation holds by construction however wrong the
+    /// counters get. It was caught by review, not by failing. Replaced here with a hand-computed
+    /// expectation derived from a specific sequence, which is falsifiable: fold Clear into the drop
+    /// count and this reports 41; count a rendered frame as dropped and it reports 41 as well.
+    ///
+    /// The sequence, and the arithmetic behind 40:
+    ///   37 writes        -> 1 waiting, 36 coalesced away
+    ///   1 read           -> 0 waiting, 36
+    ///   Clear on empty   -> no-op, 36
+    ///   5 writes         -> 1 waiting, 40
+    ///   Clear            -> 0 waiting, 40, and the cleared frame is NOT a drop
+    /// </summary>
+    [Fact]
+    public void DroppedFramesCountsOnlyCoalescedAwayFrames_NotClearedOnes()
+    {
+        var coalescer = new FrameCoalescer();
+
+        for (int i = 0; i < 37; i++)
+        {
+            coalescer.Write(Frame(i));
+        }
+
+        Assert.True(coalescer.TryRead(out _));
+        coalescer.Clear();
+
+        for (int i = 0; i < 5; i++)
+        {
+            coalescer.Write(Frame(i));
+        }
+
+        coalescer.Clear();
+
+        Assert.Equal(0, coalescer.Pending);
+        Assert.Equal(40, coalescer.DroppedFrames);
+    }
+
+    /// <summary>
+    /// Clear is tracked apart from DroppedFrames on purpose: a frame discarded on disconnect was
+    /// discarded deliberately, not coalesced away. Folding the two together would make the visible
+    /// drop counter lie about the policy it is supposed to explain.
+    /// </summary>
+    [Fact]
+    public void ClearDiscardsPendingFramesWithoutCountingThemAsDrops()
+    {
+        var coalescer = new FrameCoalescer();
+        coalescer.Write(Frame(123));
+        Assert.Equal(1, coalescer.Pending);
+
+        coalescer.Clear();
+
+        Assert.Equal(0, coalescer.Pending);
+        Assert.Equal(0, coalescer.DroppedFrames);
+        Assert.False(coalescer.TryRead(out SensorFrame frame));
+        Assert.Equal(default, frame);
+    }
+
+    /// <summary>
+    /// An empty drain must be a no-op that reports honestly. A timer tick that "rendered" a default
+    /// frame would blank the scene between arrivals.
+    /// </summary>
+    [Fact]
+    public void TryReadOnAnEmptyCoalescerReportsFalseAndYieldsNoFrame()
+    {
+        var coalescer = new FrameCoalescer();
+
+        Assert.False(coalescer.TryRead(out SensorFrame frame));
+        Assert.Equal(default, frame);
+        Assert.Equal(0, coalescer.DroppedFrames);
+        Assert.Equal(0, coalescer.Pending);
+    }
+
+    /// <summary>
+    /// Write is called from the transport callback. A producer that can block the transport is a
+    /// defect in its own right, so the non-blocking claim is checked with a timeout rather than
+    /// asserted. The timeout is generous: the point is "does not hang", not "is fast".
+    /// </summary>
+    [Fact]
+    public async Task WriteNeverBlocksTheProducer()
+    {
+        var coalescer = new FrameCoalescer();
+
+        Task writes = Task.Run(() =>
+        {
+            for (int i = 0; i < 5000; i++)
+            {
+                coalescer.Write(Frame(i));
+            }
+        });
+
+        // Task.Wait is a blocking call, which the xunit analyzer rejects (xUnit1031) because a test
+        // that blocks can deadlock the runner. WhenAny plus a delay is the non-blocking form of the
+        // same question: did the producer finish, or did it hang?
+        Task finished = await Task.WhenAny(writes, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.True(finished == writes, "Write blocked the producer.");
+        Assert.Equal(1, coalescer.Pending);
+        Assert.Equal(4999, coalescer.DroppedFrames);
+    }
+
+    /// <summary>
+    /// SerialPort raises DataReceived on thread-pool threads, so overlapping writes are possible in
+    /// the real transport. The bound must survive that, and the drop counter must not lose increments.
+    ///
+    /// THE FIRST VERSION OF THE COUNTER ASSERTION WAS A TAUTOLOGY AND WAS CAUGHT BY REVIEW, NOT BY
+    /// FAILING. It read "written - 1 == DroppedFrames + Pending", but DroppedFrames is DEFINED as
+    /// written - read - cleared - pending, so that equation holds by construction no matter how wrong
+    /// the counters become. Replaced with a hand-computed expectation: 1600 writes, one drained, so
+    /// exactly 1599 were coalesced away. Let a single Interlocked.Increment be lost under contention
+    /// and this reports 1598 and fails.
+    /// </summary>
+    [Fact]
+    public void ConcurrentWritersKeepTheBoundAndTheCountersExact()
+    {
+        var coalescer = new FrameCoalescer();
+        const int writers = 8;
+        const int perWriter = 200;
+
+        Parallel.For(0, writers, _ =>
+        {
+            for (int i = 0; i < perWriter; i++)
+            {
+                coalescer.Write(Frame(i));
+            }
+        });
+
+        Assert.True(coalescer.Pending <= 1, $"pending grew past one slot: {coalescer.Pending}");
+        Assert.True(coalescer.TryRead(out _));
+
+        // 1600 written, 1 drained, 1599 coalesced away — computed here, not derived from the
+        // property's own definition.
+        Assert.Equal(1599, coalescer.DroppedFrames);
+        Assert.Equal(0, coalescer.Pending);
+    }
+
+    /// <summary>
+    /// Guards the counter's width the same way LineFramer's DroppedBytes is guarded: a counter that
+    /// wraps is worse than no counter, because it reads as "no frames dropped".
+    /// </summary>
+    [Fact]
+    public void CountersAreLongNotInt()
+    {
+        Type type = typeof(FrameCoalescer);
+
+        foreach (string name in new[] { "Pending", "DroppedFrames" })
+        {
+            PropertyInfo property = type.GetProperty(name)!;
+            Assert.True(property.PropertyType == typeof(long),
+                $"{name} must be long; a counter that wraps reads as 'no frames dropped'.");
+        }
+
+        foreach (string name in new[] { "_written", "_read", "_cleared" })
+        {
+            FieldInfo field = type.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
+            Assert.True(field.FieldType == typeof(long), $"{name} must be long.");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Where the policy lives, and what MainWindow actually does with it.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The plan's sketch puts the channel in the App layer. It is in Core instead, because D2 is a
+    /// behaviour fix and behaviour must be testable headlessly. This guard is written in both
+    /// directions so it is falsifiable: Core must hold the policy, and the App must actually use it
+    /// rather than keeping its own copy or its own BeginInvoke path.
+    /// </summary>
+    [Fact]
+    public void CoalescingPolicyLivesInCore_NotInTheApp()
+    {
+        Assembly core = typeof(FrameCoalescer).Assembly;
+
+        // "System.Windows.Threading" is not an assembly name — DispatcherTimer lives in
+        // PresentationFramework — so listing it here would assert nothing. The guard checks the
+        // assemblies that actually carry WPF types, the same list ArchitectureInvariantTests uses.
+        Assert.All(
+            core.GetReferencedAssemblies().Select(name => name.Name ?? string.Empty),
+            name => Assert.False(
+                name is "PresentationCore" or "PresentationFramework" or "WindowsBase" or "System.Windows.Forms",
+                $"Core acquired {name}; the coalescer must stay testable without a UI."));
+
+        FieldInfo? field = typeof(MainWindow).GetField("_coalescer", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        Assert.Equal(typeof(FrameCoalescer), field!.FieldType);
+    }
+
+    /// <summary>
+    /// Phase 4's acceptance line in §5: "Frame rate is a declared UI setting, not a baud-rate side
+    /// effect." A setting the user cannot reach is not a setting, so the control and its handler are
+    /// checked in the actual XAML and code-behind. These assertions fail if the control is removed,
+    /// if its handler is unwired, or if the per-frame marshalling is reinstated — which is what makes
+    /// them guards rather than decoration.
+    /// </summary>
+    [Fact]
+    public void RenderRateIsAUserVisibleSetting_AndFrameReceivedNoLongerMarshalsPerFrame()
+    {
+        string appDir = FindAppSourceDirectory();
+        string xaml = File.ReadAllText(Path.Combine(appDir, "MainWindow.xaml"));
+        string code = File.ReadAllText(Path.Combine(appDir, "MainWindow.xaml.cs"));
+
+        Assert.Contains("RenderRateComboBox", xaml, StringComparison.Ordinal);
+        Assert.Contains("SelectionChanged=\"RenderRate_SelectionChanged\"", xaml, StringComparison.Ordinal);
+
+        Assert.Contains("_renderTimer.Tick += RenderTimer_Tick;", code, StringComparison.Ordinal);
+        Assert.Contains("_renderTimer.Interval = RenderInterval(", code, StringComparison.Ordinal);
+
+        // The frame path must hand the frame to the coalescer and stop. If Dispatcher.BeginInvoke
+        // reappears anywhere in it, D2 is back.
+        string frameHandler = ExtractMethod(code, "private void Stream_FrameReceived");
+        Assert.Contains("_coalescer.Write(frame);", frameHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("Dispatcher.BeginInvoke", frameHandler, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns the body of a method by brace matching, so assertions can be made about one method
+    /// instead of about the whole 780-line file. Without this, "the file contains no BeginInvoke"
+    /// would be false anyway — StatusText and rejected lines still marshal through it, correctly.
+    /// </summary>
+    private static string ExtractMethod(string source, string signatureStart)
+    {
+        int start = source.IndexOf(signatureStart, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"method '{signatureStart}' not found in MainWindow.xaml.cs");
+
+        int open = source.IndexOf('{', start);
+        Assert.True(open >= 0, $"no body found for '{signatureStart}'.");
+
+        int depth = 0;
+        for (int i = open; i < source.Length; i++)
+        {
+            if (source[i] == '{')
+            {
+                depth++;
+            }
+            else if (source[i] == '}' && --depth == 0)
+            {
+                return source.Substring(start, i - start + 1);
+            }
+        }
+
+        Assert.Fail($"unbalanced braces after '{signatureStart}'.");
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// 60 Hz is the rate the plan names. Pinned so the default is a decision on the record rather
+    /// than a number that happened to be typed.
+    /// </summary>
+    [Fact]
+    public void DefaultRenderRateIsThePlannedSixtyHertz()
+    {
+        FieldInfo field = typeof(MainWindow)
+            .GetField("DefaultRenderRateHz", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        Assert.Equal(60, (int)field.GetValue(null)!);
+    }
+
+    /// <summary>
+    /// Walks up from the test assembly's output directory to the App project directory. The test
+    /// project references the App project, so both bin trees sit under the same repo root.
+    /// </summary>
+    /// <summary>
+    /// Locates the App project's source directory from the test assembly's own location.
+    ///
+    /// The App assembly is COPIED into the test project's output folder, so its Location points into
+    /// EchoEnvironment.Tests\bin\Debug\net10.0-windows — walking up from it visits only bin
+    /// directories, EchoEnvironment.Tests, and the repo root, none of which contains MainWindow.xaml.
+    /// The first version of this helper did exactly that and failed with a null directory.
+    ///
+    /// The reliable anchor is this test project's own .csproj: it is copied next to its assembly by
+    /// nothing, so it is found by walking up from the repo layout rather than from the bin tree. Its
+    /// parent is the repo root, and the App project sits beside it.
+    /// </summary>
+    private static string FindAppSourceDirectory()
+    {
+        var directory = new DirectoryInfo(Path.GetDirectoryName(typeof(FrameCoalescerTests).Assembly.Location)!);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EchoEnvironment.Tests.csproj")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.NotNull(directory);
+
+        string? repoRoot = directory!.Parent?.FullName;
+        Assert.NotNull(repoRoot);
+
+        string appDirectory = Path.Combine(repoRoot!, "EchoEnvironment");
+        Assert.True(File.Exists(Path.Combine(appDirectory, "MainWindow.xaml")),
+            $"expected the App project at {appDirectory}; the repository layout has moved.");
+        Assert.True(File.Exists(Path.Combine(appDirectory, "MainWindow.xaml.cs")),
+            $"expected MainWindow.xaml.cs at {appDirectory}.");
+
+        return appDirectory;
+    }
+}
