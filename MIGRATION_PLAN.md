@@ -1052,11 +1052,13 @@ Two things this baseline is *not*: it is not a connected scene, so it cannot val
 | `EchoEnvironment.Rendering/ScenePrimitives.cs` | 104 | `AddLine`, `AddAxes`, `CreateAxisLabel`, `CreateWorldAxes`, bodies verbatim |
 | `EchoEnvironment.Rendering/WpfMath.cs` | 50 | The adapter, moved from the App; `+ ToColor(this in Rgb)` |
 | `EchoEnvironment.Core/ColorScale.cs` | 37 | `Rgb` record struct + `ColorScale.For(mm, maxDistance)` |
-| `EchoEnvironment.Tests/ArchitectureInvariantTests.cs` | 252 → **388** | `WpfConversionIsConfinedToOneType` **retargeted and its rule rewritten**; 3 new guards; `HasCoreSignature` / `IsCoreAssembly` helpers |
+| `EchoEnvironment.Tests/ArchitectureInvariantTests.cs` | 252 → **381** | `WpfConversionIsConfinedToOneType` **retargeted and its rule rewritten**; 3 new guards; `HasCoreSignature` / `IsCoreAssembly` helpers |
 | `EchoEnvironment/WpfMath.cs` | **deleted** (38) | Superseded by the Rendering copy |
-| `EchoEnvironment/MainWindow.xaml.cs` | **827 → 593** (−234) | 12 static members deleted, call sites rewired |
+| `EchoEnvironment/MainWindow.xaml.cs` | **827 → 595** (−232) | 12 static members deleted, call sites rewired |
 
-`MainWindow.xaml.cs` is now **593 lines** — the largest single reduction the migration has produced, and the first movement *toward* §5's "< 200 lines" criterion. It is still 3× that target; the rest is Phase 6b.
+`MainWindow.xaml.cs` is now **595 lines** — the largest single reduction the migration has produced, and the first movement *toward* §5's "< 200 lines" criterion. It is still ~3× that target; the rest is Phase 6b.
+
+> **Two of the line counts in the table above were wrong when first written** (388 and 593; the files are 381 and 595). They came from adding the edit tool's per-call line deltas instead of measuring the files. Corrected against a direct line count. The commit message for `bce4b00` still says 593 — it is not amended, because amending would rewrite a published-in-history commit, and the error is a line count rather than a claim about behaviour.
 
 ### 12.3 Three corrections to the plan's own text — one of them would not have compiled
 
@@ -1109,5 +1111,5 @@ Splitting a move is not the same as splitting a behaviour change, so §3 rule 2 
 6. ⚠️ **D5 and D7 remain unfixed**, still owed as their own commits (§3 rule 2).
 7. ⚠️ **Latency at 115200 baud unmeasured** (§11.8 item 3), **no real serial log** for the `ReplaySensorStream` parity check (§11.8 item 4), **firmware 25/73 confirmation** never done, **physical tilt** never done.
 8. ⚠️ **`EchoEnvironment\Math\` still exists and is empty** — manual `rmdir`, invisible to git and to solution-file listings (§9.8).
-9. **`MainWindow.xaml.cs` is 593 lines**, not < 200. Phase 6b.
+9. **`MainWindow.xaml.cs` is 595 lines**, not < 200. Phase 6b.
 10. **`TreatWarningsAsErrors` still has not bitten at Phase 5.** §7.3 predicted it would; five projects built clean, 0 warnings, including the new one. The prediction remains untested rather than disproved — it may still bite when XAML is touched in 5c.
