@@ -1,6 +1,6 @@
 ﻿# EchoEnvironment — Migration Plan
 
-**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `7ee98b2`, working tree clean, 10 commits ahead of `origin/main`, solution builds 0 errors / 0 warnings.
+**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `2c81aa2`, working tree clean, 11 commits ahead of `origin/main`, solution builds 0 errors / 0 warnings.
 **Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ⚠ step 2d deferred to Phase 3 (§9.7) · **3 ← next** · 4–7 pending.
 **Test suite:** **130 tests, 130 passed, 0 failed, 0 skipped.**
 **Goal:** split the 763-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
@@ -9,7 +9,7 @@
 
 ---
 
-## 0. Current state (verified against the tree at `7ee98b2`)
+## 0. Current state (verified against the tree at `2c81aa2`)
 
 ```
 EchoEnvironment.slnx                 3 projects: App, Core, Tests
@@ -102,7 +102,7 @@ Use file-scoped namespaces everywhere (`namespace EchoEnvironment.Core;`) — th
 3. **TFM direction.** `net10.0-windows` may reference `net10.0`, never the reverse. This is what forces `Vec3`/`Mat3` into Core.
 4. ~~⚠️ `TargetFramework` now lives in `Directory.Build.props` as `net10.0-windows` — inherited by every new project.~~ **✅ FIXED in Phase 2.** `TargetFramework` was **removed** from `Directory.Build.props`; each csproj declares its own, where it is visible and intentional. See §7.4 for why the inherited form was dangerous, and §9.4 item 2 for the guard that now enforces the invariant it was meant to protect. **This gotcha must be re-applied to the new projects:** `EchoEnvironment.Core` is `net10.0`; `Hardware` and `Rendering` must each state `net10.0-windows` explicitly. Do not reintroduce a shared TFM.
 5. **Adding a project to `.slnx` on disk does not make Visual Studio load it.** This bit twice (§8, §9.4) and no automated tool could fix it. When a phase creates a new project, **expect to reload the solution manually** and verify by test count, not by the solution overview.
-6. **`.slnx` project entries are not self-documenting about load state.** `38813e1 "Add plan"` added both `EchoEnvironment.Core` and `EchoEnvironment.Tests` to `EchoEnvironment.slnx` and hung `MIGRATION_PLAN.md` in a `/Solution/` folder. The `.slnx` on disk lists 3 projects while `get_solution_overview` reports 2 — see §4's "Solution state is unreliable" row. When Phase 3 adds a fourth project, expect the same disagreement and verify by assembly + test count.
+6. **`.slnx` project entries are not self-documenting about load state.** `38813e1 "Add plan"` added both `EchoEnvironment.Core` and `EchoEnvironment.Tests` to `EchoEnvironment.slnx` and hung `MIGRATION_PLAN.md` in a `/Solution/` folder. For the whole of Phases 1–2 the `.slnx` on disk listed 3 projects while the solution overview reported 1 or 2. **§9.10 shows the disagreement is a stale-solution symptom, not a permanent property:** after a reopen, the overview reported 3 and all three projects built individually. Still verify by assembly + test count, and still expect the disagreement when Phase 3 adds a fourth project.
 
 ---
 
@@ -526,7 +526,7 @@ Phase 7  polish
 | `net10.0` Core accidentally references a WPF type | Medium | High | Add a build-time guard: an analyzer rule or a simple test asserting `typeof(OrientationFilter).Assembly.GetReferencedAssemblies()` contains no `PresentationCore`/`WindowsBase`. | ✅ **Done, and the recommended form was insufficient.** The literal suggestion — assert absence of `PresentationCore`/`WindowsBase` — was implemented first and **passed while asserting nothing**, because `Window`/`Application` live in `PresentationFramework`. See §9.4 item 2. The shipped guard covers all three assemblies from one shared list. |
 | Behavior drift in `LineFramer` (framing bugs = dropped/corrupted frames) | Medium | High | `LineFramer` gets its own test suite in Phase 3a, plus a `ReplaySensorStream` parity check against a real capture. | ⬜ Not started. Note the parity check needs a **real captured log**, which the repo does not have. Capture one during Phase 3's hardware session, before writing `ReplaySensorStream`. |
 | **A test that asserts nothing is mistaken for protection** — *added after Phase 2* | **High** | High | Four such guards were written in Phase 2 and only revealed themselves by failing or by review: a `-windows` substring check that can never fire, a WPF-signature check matching only `WindowsBase`, a namespace filter that omitted `IsPublic`, and a cross-product assertion that was mathematically false. **A green suite is not evidence that the guards assert anything.** Review each guard by asking what would have to change for it to fail; if the answer is "nothing," it is decoration. | 🟡 **Ongoing discipline, not a one-time fix.** Applies to every guard added in Phases 3–6. |
-| **Solution state is unreliable** — *added after §8 and §9.4, which were the same failure twice* | Medium | Medium | `get_solution_overview` reported 1 project in §8 and 2 projects in every Phase 2 run, including green ones, while the `.slnx` on disk listed 3. Neither the overview nor the `.slnx` on disk proves a project is loaded. **Evidence that a project is loaded: its assembly was produced, and the test count matches expectation.** A test count *lower* than expected means discovery silently skipped something. | ✅ **Understood and applied.** Do not re-attempt automated fixes; go straight to the manual reload. |
+| **Solution state is unreliable** — *added after §8 and §9.4, which were the same failure twice* | Medium | Medium | `get_solution_overview` reported 1 project in §8 and 2 projects in every Phase 2 run, including green ones, while the `.slnx` on disk listed 3. Neither the overview nor the `.slnx` on disk proves a project is loaded. **Evidence that a project is loaded: its assembly was produced, and the test count matches expectation.** A test count *lower* than expected means discovery silently skipped something. | ✅ **Diagnosed and confirmed, §9.10.** Reopening the solution made the overview report **3** projects and all three built individually — so the disagreement was a stale in-memory solution, not a property of `.slnx`. The mitigation stands (verify by assembly + test count, expect the disagreement when Phase 3 adds a fourth project), but the fix is known to work: reopen, don't re-diagnose. |
 | **A manual "looks fine" check is mistaken for a pixel comparison** — *added when Phase 2's visual gate closed* | Medium | High | Phase 2's gate asked only that the app "renders identically", and a run-and-look is the right strength for that: a mirrored or transposed `Mat3` is glaring in a 3D view. Phase 5's gate asks for a **pixel diff**, and its changes are subtle by design (brush reuse, transform reuse, named layers, axis relabelling). Recording "I ran it and it looked fine" as satisfying both conflates two different bars. **Capture a reference screenshot before Phase 5 starts**, and state which bar each check actually meets. | ⬜ Open. No reference screenshot exists. Must be done before Phase 5, not after. |
 
 ---
@@ -563,7 +563,7 @@ Phase 7  polish
 
 **Minimum viable value is delivered at the end of Phase 2 (~7.5 h) — and Phase 2 is finished, gate closed:** testable domain logic, no WPF dependency, a build that still works, 130 passing tests, and a confirmed-working app. If nothing else is done, the migration has already paid for itself.
 
-Two costs the effort table did not anticipate: the two solution-reload blockers (§8, §9.4) and the four test defects that had to be diagnosed as *test* defects rather than code defects (§9.4). Budget similar overhead for Phase 3's new project.
+Two costs the effort table did not anticipate: the two solution-reload blockers (§8, §9.4) and the four test defects that had to be diagnosed as *test* defects rather than code defects (§9.4). Budget similar overhead for Phase 3's new project. **§9.10 narrows this:** the reload itself is cheap — one reopen — and it is now confirmed to work. The expensive part is *diagnosing* that a reload is needed, which §8 spent a full session on. Do not re-spend that: when a new project appears missing, reopen first and verify by test count.
 
 ---
 
@@ -619,7 +619,7 @@ The build tool exposes no configuration switch. Three builds succeeded with 0 er
 
 **This has now survived Phases 1 and 2 unaddressed.** Every green result recorded in §8 and §9 is a Debug result. Run a Release build manually — the cost is one command, and the failure mode it is guarding against (a Release-only warning that `TreatWarningsAsErrors` turns into an error, or a Release-only analyzer complaint in the test project) has so far never been exercised.
 
-**Re-attempted after Phase 2; confirmed unfixable with the available tooling.** The build tool exposes only `project_name` and `timeout_seconds` — there is no configuration parameter — and it built Debug, verified empirically: Debug artifacts present for all three projects, `bin\Release\` probed and absent for all three, including the `.pdb`. `run_tests` explicitly assumes a Debug build. So this is not a gap that a different prompt would close; it requires a terminal:
+**Re-attempted after Phase 2; confirmed unfixable with the available tooling rather than left as a to-do.** The build tool exposes only `project_name` and `timeout_seconds` — there is no configuration parameter — and it built Debug, verified empirically: Debug artifacts present for all three projects, `bin\Release\` probed and absent for all three, including the `.pdb`. `run_tests` explicitly assumes a Debug build. So this is not a gap that a different prompt would close; it requires a terminal:
 
 ```bash
 dotnet build EchoEnvironment.slnx -c Release
@@ -670,6 +670,8 @@ Worth doing before Phase 3 adds a fourth project that inherits `TreatWarningsAsE
 4. **Test → Run All Tests**.
 
 Only then is Phase 1's gate evaluable.
+
+> **Refined by §9.10:** step 1 alone was sufficient in both later occurrences. Steps 2–4 have never been needed — once the solution is reopened, the projects restore, build, and test on their own. Do the reload first and verify by test count before reaching for **Add → Existing Project…**.
 
 ### What to expect when it finally runs — scored against what actually happened
 
@@ -745,7 +747,7 @@ Two compile errors were also needed on the way: `nameof(FlatFacingNorth)` and fr
 
 **Also confirmed:** in one run, `EchoEnvironment.Core` could be targeted for a build directly and succeeded with zero messages — i.e. Core genuinely compiles WPF-free. In a later run it could not be targeted by name at all. Do not rely on that route. The durable evidence is the passing `CoreAssemblyReferencesNoWpfAssembly` guard, plus the fact that the App builds clean while consuming `Mat3`/`Vec3`: Core must have compiled for that to happen.
 
-Note also that the solution overview reported only 2 projects in **every** run, including the green ones, even though Core resolved for build and for both `ProjectReference`s. The overview is not a reliable indicator of what is actually loaded, and neither is the `.slnx` on disk. Trust the build and the test count.
+Note also that the solution overview reported only 2 projects in **every** run, including the green ones, even though Core resolved for build and for both `ProjectReference`s. The overview is not a reliable indicator of what is actually loaded, and neither is the `.slnx` on disk. Trust the build and the test count. **§9.10 supersedes the last sentence's framing:** after a reopen the overview did report 3, so the overview is unreliable *while the solution is stale*, which is exactly the state a new project puts it in.
 
 ### 9.5 Standing facts after verification
 
@@ -788,3 +790,21 @@ Git does not track empty directories, so it is invisible to `git status` and app
 3. ~~**`pre-refactor` tag was never created**~~ ✅ **It exists** — `pre-refactor` → `f3475a1` ("Code state before refactor"), the last commit before Phase 0. A better baseline than the `bc4413a` this plan recommended, since `bc4413a` already contains the plan itself.
 4. **Firmware confirmation of the 25/73-value quirk** (§4) has never been done.
 5. **Physical tilt to settle the Pitch/Roll labels** (§5, Phase 6a). The regression test exists; the human verification does not.
+
+### 9.10 Solution reopen verified the stale-solution diagnosis — first time the overview reported 3 projects
+
+A close-and-reopen of `EchoEnvironment.slnx` was performed after Phase 2's gate closed, and it produced a fact this plan had implicitly predicted would never happen: **the solution overview reported 3 projects.** For the entirety of Phases 1 and 2 it had reported 1 (§8) or 2 (§9.4) while the `.slnx` on disk listed 3.
+
+| Check | Result |
+|---|---|
+| Overview project count | **3** — App, Core, Tests |
+| `EchoEnvironment.Core` targetable by name | ✅ built individually, 0 errors / 0 warnings |
+| `EchoEnvironment` targetable by name | ✅ built individually, 0 errors / 0 warnings |
+| `EchoEnvironment.Tests` targetable by name | ✅ built individually, 0 errors / 0 warnings |
+| Full suite | **130 total, 130 passed, 0 failed, 0 skipped** |
+
+**What this settles.** The disagreement between the `.slnx` on disk and the overview was a **stale in-memory solution**, not a property of `.slnx` files or of the projects. The diagnosis in §8's "Root cause" was correct, and the fix in §8's "Required manual step" works — step 1 alone, no **Add → Existing Project…**, no manual restore.
+
+**What this does not change.** The mitigation in §4 stays: verify by assembly + test count, not by the overview. The overview became accurate only *after* a reload, and a reload is exactly what Phase 3 will need when it adds a fourth project. The durable evidence is still "the assembly was produced and the test count matches expectation."
+
+**Practical consequence for Phase 3:** when the new `EchoEnvironment.Hardware` project appears missing, **reopen the solution first** and re-check by test count. Do not re-run §8's five failed automated attempts — they were diagnosing a problem whose fix was already known. §6's effort note is updated accordingly: the reload is cheap, the *diagnosis* was expensive.
