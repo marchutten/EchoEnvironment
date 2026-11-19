@@ -12,4 +12,14 @@
     <PackageReference Include="System.IO.Ports" Version="11.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      Phase 1 seam: lets EchoEnvironment.Tests reach the internal domain classes
+      (SensorFrameParser, OrientationFilter) while they still live in this assembly.
+      Phase 2 moves them into EchoEnvironment.Core, where they become public; this
+      item can then be deleted.
+    -->
+    <InternalsVisibleTo Include="EchoEnvironment.Tests" />
+  </ItemGroup>
+
 </Project>

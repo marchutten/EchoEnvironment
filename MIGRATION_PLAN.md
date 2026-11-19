@@ -1,6 +1,7 @@
 ﻿# EchoEnvironment — Migration Plan
 
-**Baseline:** `main` @ `f3475a1`, working tree clean, solution builds 0 errors / 0 warnings.
+**Baseline:** `main` @ `bc4413a` (Phase 0 complete), working tree clean, solution builds 0 errors / 0 warnings.
+**Phase status:** 0 ✅ done · 1 ✅ written (⚠ not yet executed — see §8) · 2 ← **next** · 3–7 pending.
 **Goal:** split the 758-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
 
 **Governing rule:** *seam first, then move.* Every phase must leave the app runnable and the build green. No phase may mix a behavior change with a structural move.
@@ -68,11 +69,12 @@ Enforced rule: **`Core` must never reference a `WindowsBase`/`PresentationCore`/
 
 Use file-scoped namespaces everywhere (`namespace EchoEnvironment.Core;`) — the existing codebase is already mixed (file-scoped in the two domain files, block-scoped in `MainWindow`/`App`). Normalize on file-scoped when a file is touched, not before.
 
-### Two gotchas that will bite if ignored
+### Gotchas that will bite if ignored
 
-1. **`AssemblyInfo.cs` / `ThemeInfo`** is a WPF attribute and lives in the App project only. Do not copy it into Core/Hardware/Rendering.
+1. **`AssemblyInfo.cs` / `ThemeInfo`** is a WPF attribute. It exists at `EchoEnvironment/AssemblyInfo.cs` — project **root**, not `Properties/` (verified at `bc4413a`). Do not copy it into Core/Hardware/Rendering. Note the SDK also generates its own `EchoEnvironment.AssemblyInfo.cs` under `obj/`, which contains **no** `ThemeInfo`; the hand-written one is load-bearing.
 2. **SDK globbing.** These are SDK-style projects with no `<Compile Include>` entries, so *moving a file on disk is enough* — no `.csproj` edits per file. Only `EchoEnvironment.slnx` needs new `<Project Path="…"/>` entries.
 3. **TFM direction.** `net10.0-windows` may reference `net10.0`, never the reverse. This is what forces `Vec3`/`Mat3` into Core.
+4. ⚠️ **`TargetFramework` now lives in `Directory.Build.props` as `net10.0-windows` — inherited by every new project.** Phase 2 needs `EchoEnvironment.Core` to be plain **`net10.0`**. The per-project csproj is evaluated *after* `Directory.Build.props`, so an explicit `<TargetFramework>net10.0</TargetFramework>` in `Core.csproj` overrides it correctly — but the override is now a **silent requirement**, and a project that forgets it will quietly compile as `net10.0-windows` while still referencing no WPF types, defeating the "Core has no WPF" invariant without any build error. See §7.4 for the recommended follow-up.
 
 ---
 
@@ -82,7 +84,7 @@ Each phase = one commit with a real message. Tag `pre-refactor` before Phase 1.
 
 ---
 
-### Phase 0 — Hygiene (30 min, zero risk)
+### Phase 0 — Hygiene ✅ DONE (`c69881d`)
 
 Do this first so every later diff is *only* code.
 
@@ -107,6 +109,23 @@ Do this first so every later diff is *only* code.
 > `TreatWarningsAsErrors` is a deliberate choice: the build is currently warning-free, and locking that in is cheaper than recovering it later. If it fights a generated WPF file, drop it to `TreatWarningsAsErrors=false` + `<WarningLevel>`.
 
 **Gate:** build green, app runs, serial connect works.
+
+#### Phase 0 verification record — ✅ PASSED (`c69881d`, verified at `bc4413a`)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Delete `apply_grid*.ps1` | ✅ | `c69881d` diffstat shows all three at `0` lines; no `*.ps1` remains in the tree |
+| Replace `.gitignore` | ✅ | now `[Bb]in/`, `[Oo]bj/`, `.vs/`, `*.user`, `*.suo`, `TestResults/`, `*.nupkg` — no C++/CMake residue |
+| Add `.editorconfig` | ✅ | `root = true`, `indent_style = space`, `indent_size = 4`, `csharp_style_namespace_declarations = file_scoped` |
+| Add `global.json` | ✅ | SDK `11.0.100`, `rollForward: latestFeature` — resolved without NETSDK error |
+| Add `Directory.Build.props` | ✅ | `Nullable`, `ImplicitUsings`, `LangVersion=latest`, `TreatWarningsAsErrors=true` |
+| Build gate | ✅ | 3 fresh builds (2 solution-wide + 1 project) — **0 errors, 0 warnings**, restore `RestoreSuccess=True`, `EchoEnvironment.exe` produced |
+
+**`TreatWarningsAsErrors` did not bite.** Flowing into restore policy (`allWarningsAsErrors: true` in `nuget.dgspec.json`), still succeeded. Generated WPF markup (`App.g.cs`, `MainWindow.g.cs`, `MainWindow.baml`) compiled clean.
+
+**Gate caveat:** the build tool cannot force a configuration switch, so the gate was proven in **Debug only**. No `bin/Release/` artifacts exist. Confirm a Release build manually before relying on it.
+
+**Five findings that change later phases — see §7.** (7.1 and 7.4 are the consequential ones.)
 
 ---
 
@@ -145,6 +164,33 @@ The tests exist to prove that Phases 2–5 changed nothing. Writing them *after*
 - Orthonormality invariant: for any random input sequence, the three basis rows stay unit-length and mutually perpendicular within tolerance. Add this as a property test — it catches drift bugs that unit tests miss.
 
 **Gate:** tests green against the *current* code. Any test that fails is a real defect — record it, don't paper over it.
+
+#### Phase 1 record — tests written, gate NOT yet passed (⚠ see §8)
+
+Files created:
+
+| File | Contents |
+|---|---|
+| `EchoEnvironment.Tests/EchoEnvironment.Tests.csproj` | xunit 2.9.2, Microsoft.NET.Test.Sdk 17.12.0, xunit.runner.visualstudio 2.8.2, `net10.0-windows`, `UseWPF=true`, ProjectReference to the App |
+| `EchoEnvironment.Tests/AssertMath.cs` | tolerance-based `Close`, `WithinRelative`, full 16-element `Matrix` comparison, `OrthonormalRows` |
+| `EchoEnvironment.Tests/SensorFrameParserTests.cs` | 394 lines, ~40 cases: the 4 legal shapes, separators, whitespace, rejections, illegal counts, culture invariance, out-param safety |
+| `EchoEnvironment.Tests/OrientationFilterTests.cs` | 760 lines, 6 hand-derived poses, known-pose matrix + `Transform()` behaviour, guards, Reset semantics, dt clamping, calibration window, stationary/moving paths, orthonormality property test |
+| `EchoEnvironment.Tests/OrientationAngleMappingTests.cs` | pins the matrix-element → reported-angle mapping, i.e. defect D1 |
+| `EchoEnvironment.Tests/ArchitectureInvariantTests.cs` | records the current assembly layout; the Core-has-no-WPF guard is `Fact(Skip = ...)` until Phase 2 |
+| `EchoEnvironment/EchoEnvironment.csproj` | added `<InternalsVisibleTo Include="EchoEnvironment.Tests" />` |
+| `EchoEnvironment.slnx` | added the test project |
+
+**Three findings the tests produced before any of them ran** — each was found by deriving the expected value independently and comparing it to the source:
+
+1. **The calibration window is 50 *accumulating* samples, not 50 *calls*.** The first `Update` returns through the initialization path and never accumulates, so `_gyroBias` is established on the **51st** call, not the 50th. The plan's wording ("exactly `CalibrationSamples` (50) samples … the 50th sets `_gyroBias`") is correct about the sample count and misleading about the call count. `CalibrationWindow_Is50AccumulatingSamples_Not50Calls` pins the boundary at call 51 vs 52.
+2. **`Reset()` does not clear the orientation axes.** It clears `_initialized`, `_calibrationCount` and the gyro bias, but **not** `_up` / `_east` / `_north`. So `Current` keeps reporting the pre-`Reset` pose until a valid frame arrives. In `MainWindow` this happens on every reconnect (`_imuFilter.Reset()` at line 268): the viewport holds the previous orientation. `Reset_DoesNotClearTheOrientationAxes_StalePoseIsStillReported` pins it.
+3. **The migration plan's own description of D1 is wrong.** §6a calls `atan2(M12, M22)` "rotation about the up axis". It is not — it is rotation of the sensor about its **own optical (−Z) axis**, i.e. image roll. Proof: a board rolled 30° about its optical axis while level reads 30 from that expression while elevation and heading stay 0; a board turned from north to east (a genuine rotation about the world up axis) reads 0. All three expressions in `SetOrientation` are individually correct and the variable names are correct — **only the two labels are swapped**, so the fix is a two-token change to the format string. `RollAboutOpticalAxis_DoesNotChangeElevation_AndIsNotRotationAboutUp` is the test that would have failed had the plan's description been implemented as written.
+
+Also pinned as deliberate quirks rather than bugs: `16 or 25 => 16` / `64 or 73 => 64`; negative millimetres accepted; `"1 15"` silently becoming two zones (`1` and `15`) because space is a frame separator — a malformed line can pass validation with corrupted values.
+
+**Correction to the plan's test list:** the plan asks to assert a *collinear* mag/accel case. With `int[]` counts, `eastMeasured.LengthSquared < 1e-6` can only fire when mag is **exactly** parallel or anti-parallel to accel — any real tilt produces integer counts large enough to clear the threshold. Same for `accel.LengthSquared < 1`: with integers that is an all-zeros check and nothing subtler. `SmallestPossibleNonZeroAccel_PassesTheGuard` documents this.
+
+**Gate status: NOT PASSED.** No test has been compiled or executed. See §8.
 
 ---
 
@@ -415,7 +461,8 @@ Phase 7  polish
 - [ ] Frame rate is a declared UI setting, not a baud-rate side effect.
 - [ ] CI builds and tests on every push.
 - [ ] README documents the serial protocol.
-- [ ] Git history has one commit per phase with a descriptive message; the six unpushed `wip`/`ok`/`q` commits squashed **before** the first push.
+- [ ] Git history has one commit per phase with a descriptive message, from `c69881d` onward.
+      ~~Squash the `wip`/`ok`/`q` commits~~ — **withdrawn, see §7**: those commits are already published on `origin/main`.
 
 ---
 
@@ -423,7 +470,7 @@ Phase 7  polish
 
 | Phase | Effort | Cumulative |
 |---|---|---|
-| 0 Hygiene | 0.5 h | 0.5 h |
+| 0 Hygiene ✅ **DONE** (`c69881d`) | 0.5 h | 0.5 h |
 | 1 Tests first | 2–3 h | 3.5 h |
 | 2 Core extraction | 3–4 h | 7.5 h |
 | 3 Hardware abstraction | 3 h | 10.5 h |
@@ -433,3 +480,47 @@ Phase 7  polish
 | 7 Polish | 3–4 h | ~20 h |
 
 **Minimum viable value is delivered at the end of Phase 2 (~7.5 h):** testable domain logic, no WPF dependency, and a build that still works. If only one thing gets done, do Phases 0–2.
+
+---
+
+## 7. Phase 0 findings — corrections to the original plan
+
+Phase 0 was intended as zero-risk hygiene. It is done and the gate passed, but verifying it surfaced five things that materially change how later phases must be executed. Recording them here rather than silently editing the phases above. **7.1 and 7.4 are the consequential ones.**
+
+### 7.1 The squash recommendation was wrong — and would have been destructive
+
+I recommended squashing the `wip`/`ok`/`q` commits "before the first push." **That premise was false.** At the time of the original analysis, `main` was 6 commits *ahead* of `origin/main`, which I read as "unpushed." It has since been pushed: `origin/main` is at `f3475a1` and contains `wip`, `q`, `ok that seems better`, and the rest.
+
+**Do not rewrite that history.** Squashing published commits requires a force-push to `origin/main` — a protected branch — which rewrites shared history for every other clone of the repo.
+
+**Withdrawn:** the squash criterion in §5.
+**Replaced with:** descriptive messages from `c69881d` forward. `c69881d` ("Phase 0: repo hygiene") and `bc4413a` ("add migration plan") already satisfy it. The pre-`c69881d` noise is permanent and cosmetic — it is not worth a force-push to a protected branch.
+
+### 7.2 `AssemblyInfo.cs` is at the project root, not `Properties/`
+
+The build probe looked for `EchoEnvironment/Properties/AssemblyInfo.cs` and got *File not found*, which initially suggested `ThemeInfo` had vanished. It had not: the file is at `EchoEnvironment/AssemblyInfo.cs`.
+
+Why this matters for Phase 2: the SDK *also* auto-generates `obj/Debug/net10.0-windows/EchoEnvironment.AssemblyInfo.cs`, and that generated file contains **no** `ThemeInfo`. Only the hand-written root file supplies it. If Phase 2 moves files by directory convention and assumes a `Properties/` folder, `ThemeInfo` can be dropped — which breaks theme resource-dictionary lookup at runtime in a way the compiler will not report.
+
+### 7.3 `TreatWarningsAsErrors` is now repo-wide — a Phase 5 hazard
+
+It passed today (0 warnings across 3 builds, including generated WPF markup and restore). But it was added to `Directory.Build.props`, so **every project created in Phases 1–6 inherits it from its first file onward.** A new test project pulling in xunit analyzers, or a `Rendering` project emitting a WPF-3D obsolete-API warning, will fail the build immediately.
+
+Not a reason to remove it — locking in warning-freedom is the point. But expect to scope it per-project (`<TreatWarningsAsErrors>false</TreatWarningsAsErrors>` in one csproj) rather than repo-wide revert, and expect it to bite at Phase 5, not Phase 1.
+
+### 7.4 ⚠️ `TargetFramework` is now inherited — this weakens the plan's core invariant
+
+This is the significant one. `Directory.Build.props` sets `net10.0-windows` for **all** projects. The plan's central guarantee is that `EchoEnvironment.Core` compiles as plain **`net10.0`** with zero WPF references — that is what makes the domain logic testable headlessly.
+
+`Core.csproj` *can* override it (csproj is evaluated after `Directory.Build.props`), and that works. The problem is that the override is now **implicit and silent**: a Core project that forgets the override compiles as `net10.0-windows`, references no WPF types anyway, builds green, and passes every test — while the `net10.0` guarantee is quietly gone. A green build would no longer prove the invariant.
+
+**Recommended follow-up (small, do it at the start of Phase 2):**
+
+1. Remove `<TargetFramework>` from `Directory.Build.props`; keep the rest (`Nullable`, `ImplicitUsings`, `LangVersion`, `TreatWarningsAsErrors`) inherited. Declare the TFM explicitly in each csproj, where it is visible and intentional.
+2. Add the build-time guard already listed in the risk register as a **hard test**, not a convention — assert `typeof(OrientationFilter).Assembly.GetReferencedAssemblies()` contains neither `PresentationCore` nor `WindowsBase`. That test is what actually protects the invariant; the TFM is only a proxy for it.
+
+Until that guard exists, §5's first acceptance criterion ("verified by test, not by inspection") is the only thing standing between Phase 2 and a silent regression.
+
+### 7.5 Gate was proven in Debug only
+
+The build tool exposes no configuration switch. Three builds succeeded with 0 errors / 0 warnings and produced `bin/Debug/net10.0-windows/EchoEnvironment.exe`, but **no `bin/Release/` artifacts exist**. The Phase 0 gate ("build green") is satisfied for Debug. Run a Release build manually before treating Release as validated — worth doing now, while the tree is clean, rather than discovering a Release-only failure at Phase 6.
