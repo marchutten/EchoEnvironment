@@ -524,3 +524,61 @@ Until that guard exists, §5's first acceptance criterion ("verified by test, no
 ### 7.5 Gate was proven in Debug only
 
 The build tool exposes no configuration switch. Three builds succeeded with 0 errors / 0 warnings and produced `bin/Debug/net10.0-windows/EchoEnvironment.exe`, but **no `bin/Release/` artifacts exist**. The Phase 0 gate ("build green") is satisfied for Debug. Run a Release build manually before treating Release as validated — worth doing now, while the tree is clean, rather than discovering a Release-only failure at Phase 6.
+
+---
+
+## 8. ⛔ Phase 1 blocker — the test project is not loaded in the solution
+
+**The Phase 1 gate is not met.** The tests exist and are committed (`f534d57`), but **not one has been compiled or executed.** This is recorded as a blocker, not as a completed phase.
+
+### What is verified
+
+| Claim | Status | Evidence |
+|---|---|---|
+| App project still builds after the `InternalsVisibleTo` edit | ✅ | single-project build of `EchoEnvironment`: 0 errors, 0 warnings, `bin\Debug\net10.0-windows\EchoEnvironment.dll` produced |
+| The seam is real | ✅ | `obj\Debug\net10.0-windows\EchoEnvironment.AssemblyInfo.cs` line 21: `[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("EchoEnvironment.Tests")]` |
+| `EchoEnvironment.slnx` on disk lists both projects | ✅ | 4 lines, both `<Project Path=…/>` entries present |
+| Test project restored | ❌ | `EchoEnvironment.Tests\obj\project.assets.json` does not exist |
+| Test project compiled | ❌ | `EchoEnvironment.Tests\bin\Debug\net10.0-windows\EchoEnvironment.Tests.dll` does not exist |
+| Any test executed | ❌ | `total_tests: 0` — "The test source file … was not found." |
+
+### Root cause
+
+`get_solution_overview` reports **`total_projects: 1`** — only `EchoEnvironment` — even though the `.slnx` file on disk lists two. Visual Studio is holding a stale in-memory solution and never picked up the added project. Because the project is not loaded, it is never restored or built, so the test assembly never exists and the runner aborts before discovery (`MSB4181: The "VSTestTask" task returned false but did not log an error`).
+
+### What was tried and failed
+
+| Attempt | Result |
+|---|---|
+| Add `<Project Path="EchoEnvironment.Tests/…" />` to `EchoEnvironment.slnx` | overview still 1 project |
+| Delete and recreate `EchoEnvironment.slnx` | overview still 1 project |
+| Delete `.vs/EchoEnvironment.slnx/DesignTimeBuild/.dtbcache.v2` and `.vs/EchoEnvironment.slnx/v18/.futdcache.v2` | overview still 1 project |
+| Rewrite `EchoEnvironment.slnx` with a comment to force a change event | overview still 1 project |
+| `set_file_project_status` on the test csproj | `Project not found in solution` — the tool cannot register a project into a solution it cannot see |
+
+**No automated path exists to fix this.** It requires a human action in the IDE.
+
+### Required manual step (do this before anything else)
+
+1. In Visual Studio: **File → Close Solution**, then reopen `EchoEnvironment.slnx`. If it still shows one project, right-click the solution node → **Reload Solution**.
+2. Confirm **Solution Explorer shows `EchoEnvironment.Tests`**. If it does not, right-click solution → **Add → Existing Project…** and select `EchoEnvironment.Tests\EchoEnvironment.Tests.csproj`.
+3. Right-click `EchoEnvironment.Tests` → **Restore**, then **Build**.
+4. **Test → Run All Tests**.
+
+Only then is Phase 1's gate evaluable.
+
+### What to expect when it finally runs — likely first failures, in order
+
+1. **`Microsoft.NET.Test.Sdk 17.12.0` may not support `net10.0`.** This is the single most likely failure and it is a *tooling* failure, not a code defect. If restore or discovery fails, bump `Microsoft.NET.Test.Sdk` (and keep `xunit` 2.9.2 + `xunit.runner.visualstudio` 2.8.2, which are a matched pair) to the newest available 17.x. **Do not "fix" this by changing a test.**
+2. **`TreatWarningsAsErrors` is inherited by the test project** (§7.3). xunit analyzer warnings would become build errors. Mitigation, if it fires: `<TreatWarningsAsErrors>false</TreatWarningsAsErrors>` in `EchoEnvironment.Tests.csproj` only — scoped, per §7.3, not a repo-wide revert.
+3. **`UseWPF=true` in the test project is mandatory, not incidental.** `OrientationFilter` exposes `Matrix3D`/`Vector3D` in its public signature, so the tests cannot compile without the WPF reference assemblies. Removing it produces a cascade of type errors that look like test bugs.
+4. **One test reports as Skipped on purpose**: `ArchitectureInvariantTests.CoreDomainTypesExposeNoWpfTypes` carries `Fact(Skip = "Phase 2: …")`. A skipped test that says *why* it is skipped is honest; a passing test that asserts nothing would be worse. **Phase 2 must un-skip it.** Do not read "1 skipped" as a green gate.
+5. The culture tests assign `CultureInfo.CurrentCulture` and restore it in `finally`. `CurrentCulture` is thread-local and xunit runs test collections on separate threads, so parallel execution is safe here — but if a culture test ever fails only in a full run and passes alone, that assumption is the first thing to re-examine.
+
+### Expected counts once it runs
+
+Roughly **110 test cases** across 4 classes (the parser theory cases expand), plus 1 intentionally skipped. A count far below that means discovery is broken, not that tests failed.
+
+### Consequence for the sequencing rule
+
+§3 rule 1 says *"Never do Phase 5 before Phase 1."* The same logic now blocks **Phase 2**: without a green test run, Phase 2's gate ("tests green **unchanged**") has nothing to compare against, and the `Mat3` layout risk in §4 — rated **High likelihood / High impact** — would be guarded only by tests that have never executed. **Phase 2 must not start until the manual reload above is done and the suite is green.**

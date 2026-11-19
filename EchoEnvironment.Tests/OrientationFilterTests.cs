@@ -35,8 +35,11 @@ namespace EchoEnvironment.Tests;
 ///   world coordinates. Getting this relationship wrong is the highest-risk item in the Phase 2
 ///   Mat3 port, and it is pinned element-by-element in MatrixLayout_... below.
 ///
-/// Poses are chosen so accel/mag counts are exact integers after rounding, so tolerances can be
-/// tight. The one exception (30 degrees) states its looser tolerance explicitly.
+/// Each pose carries a CountScale chosen so its accel/mag counts are EXACT integers, not rounded
+/// approximations. Without that, a pose is recovered only to count-rounding error - about 2e-4 for
+/// a 500-count vector holding thirds - and a 1e-9 tolerance asserts nothing. The one exception
+/// (30 degrees, whose cos/sin are irrational) scales its counts up instead and states its looser
+/// tolerance explicitly.
 /// </summary>
 public class OrientationFilterTests
 {
@@ -44,7 +47,19 @@ public class OrientationFilterTests
     private const double IdealMagCounts = 500.0;
     private const double PoseTolerance = 1e-9;
 
-    private sealed record Pose(Vector3D X, Vector3D Y, Vector3D Z)
+    /// <summary>
+    /// GeneralPose's components are thirds. At 500 counts, 1/3 of that is 166.666, which rounds to
+    /// 167 - a 0.2% error, so the pose could only be recovered to ~2e-4 and a 1e-9 tolerance would
+    /// be meaningless. A scale divisible by 3 makes the counts exact: 1500 gives accel
+    /// (500, 1000, 500) and mag (-1000, -500, -1000).
+    /// </summary>
+    private const double GeneralPoseCountScale = 1500.0;
+
+    /// <summary>
+    /// The accel/mag magnitude at which this pose's sensor-frame counts are exact integers, so the
+    /// pose is recovered to PoseTolerance rather than to count-rounding error.
+    /// </summary>
+    private sealed record Pose(Vector3D X, Vector3D Y, Vector3D Z, double CountScale = IdealAccelCounts)
     {
         /// <summary>World up, expressed in sensor coordinates — what the accelerometer reads.</summary>
         public Vector3D UpInSensor => new(X.Y, Y.Y, Z.Y);
@@ -92,9 +107,12 @@ public class OrientationFilterTests
     /// <summary>
     /// A fully general pose with no zero or repeated elements — the layout-pinning pose.
     /// Exact orthonormal right-handed triple: X=(2/3,1/3,2/3), Y=(-2/3,2/3,1/3), Z=(-1/3,-2/3,2/3).
+    /// Every component is a third, so it needs a count scale divisible by 3; see
+    /// GeneralPoseCountScale.
     /// </summary>
     private static readonly Pose GeneralPose = new(
-        new(2.0 / 3, 1.0 / 3, 2.0 / 3), new(-2.0 / 3, 2.0 / 3, 1.0 / 3), new(-1.0 / 3, -2.0 / 3, 2.0 / 3));
+        new(2.0 / 3, 1.0 / 3, 2.0 / 3), new(-2.0 / 3, 2.0 / 3, 1.0 / 3), new(-1.0 / 3, -2.0 / 3, 2.0 / 3),
+        GeneralPoseCountScale);
 
     private static Vector3D Counts(double x, double y, double z) => new(x, y, z);
 
@@ -103,9 +121,14 @@ public class OrientationFilterTests
          (int)Math.Round(accel.X), (int)Math.Round(accel.Y), (int)Math.Round(accel.Z),
          (int)Math.Round(mag.X), (int)Math.Round(mag.Y), (int)Math.Round(mag.Z)];
 
+    /// <summary>
+    /// The raw counts a device would report for this pose. Scales default to the pose's own
+    /// CountScale, which is chosen so those counts are exact integers - see the class header.
+    /// </summary>
     private static int[] PoseFrame(Pose pose, Vector3D gyro,
-        double accelScale = IdealAccelCounts, double magScale = IdealMagCounts) =>
-        Frame(gyro, pose.UpInSensor * accelScale, pose.NorthInSensor * magScale);
+        double? accelScale = null, double? magScale = null) =>
+        Frame(gyro, pose.UpInSensor * (accelScale ?? pose.CountScale),
+                   pose.NorthInSensor * (magScale ?? pose.CountScale));
 
     /// <summary>
     /// A filter that has completed its calibration window: call 1 initializes (and does NOT
@@ -285,7 +308,7 @@ public class OrientationFilterTests
     public void MatrixLayout_NorthColumnIsNegated_AndRowsAreSensorAxes()
     {
         var filter = new OrientationFilter();
-        Matrix3D m = filter.Update(PoseFrame(GeneralPose, Counts(0, 0, 0), 300, 300), 0.1);
+        Matrix3D m = filter.Update(PoseFrame(GeneralPose, Counts(0, 0, 0)), 0.1);
 
         // Row 1 = sensor X axis in world = (2/3, 1/3, 2/3)
         AssertMath.Close(2.0 / 3, m.M11, 1e-9, "M11");
@@ -306,9 +329,10 @@ public class OrientationFilterTests
         AssertMath.Close(0, m.M14, AssertMath.Exact, "M14");
         AssertMath.Close(0, m.M24, AssertMath.Exact, "M24");
         AssertMath.Close(0, m.M34, AssertMath.Exact, "M34");
-        AssertMath.Close(0, m.M41, AssertMath.Exact, "M41");
-        AssertMath.Close(0, m.M42, AssertMath.Exact, "M42");
-        AssertMath.Close(0, m.M43, AssertMath.Exact, "M43");
+        // WPF names the fourth row's translation slots OffsetX/Y/Z; M41/M42/M43 do not exist.
+        AssertMath.Close(0, m.OffsetX, AssertMath.Exact, "OffsetX");
+        AssertMath.Close(0, m.OffsetY, AssertMath.Exact, "OffsetY");
+        AssertMath.Close(0, m.OffsetZ, AssertMath.Exact, "OffsetZ");
         AssertMath.Close(1, m.M44, AssertMath.Exact, "M44");
 
         // A rotation, not a reflection: determinant +1, not -1.
@@ -653,7 +677,9 @@ public class OrientationFilterTests
         double alpha = 1 - Math.Exp(-0.1 / 0.5);
 
         // _up starts at (0,1,0); measured up is (0, 0.8, -0.6). Blend then normalize.
-        Vector3D expectedUp = new(0, 1, 0) * (1 - alpha) + new(0, 0.8, -0.6) * alpha;
+        // Explicit Vector3D types are required: a target-typed `new(...)` has no type of its own, so
+        // it cannot be the left operand of an operator.
+        Vector3D expectedUp = new Vector3D(0, 1, 0) * (1 - alpha) + new Vector3D(0, 0.8, -0.6) * alpha;
         expectedUp.Normalize();
 
         // M32 is the sensor-Z component of world up (row 3, column 2).

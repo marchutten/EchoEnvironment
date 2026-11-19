@@ -58,29 +58,26 @@ public class ArchitectureInvariantTests
         Assert.Equal(appAssembly, typeof(OrientationFilter).Assembly);
     }
 
+    private const string Matrix3DFullName = "System.Windows.Media.Media3D.Matrix3D";
+
     [Fact]
     public void OrientationFilterPublicSurfaceIsCurrentlyAllWpfTypes()
     {
         // FINDING, not approval: every type in OrientationFilter's public signature is a WPF type,
         // which is exactly why Phase 2a (Vec3/Mat3) has to exist before the class can move.
-        var wpfTypes = new List<string>();
-
         PropertyInfo current = typeof(OrientationFilter).GetProperty("Current")
             ?? throw new InvalidOperationException("OrientationFilter.Current not found.");
-        if (IsWpf(current.PropertyType))
-        {
-            wpfTypes.Add($"Current -> {current.PropertyType.FullName}");
-        }
-
         MethodInfo update = typeof(OrientationFilter).GetMethod("Update")
             ?? throw new InvalidOperationException("OrientationFilter.Update not found.");
-        if (IsWpf(update.ReturnType))
-        {
-            wpfTypes.Add($"Update() -> {update.ReturnType.FullName}");
-        }
 
-        Assert.NotEmpty(wpfTypes);
-        Assert.Contains("System.Windows.Media.Media3D.Matrix3D", wpfTypes);
+        Assert.True(IsWpf(current.PropertyType),
+            $"expected Current to be a WPF type today, got {current.PropertyType.FullName}");
+        Assert.True(IsWpf(update.ReturnType),
+            $"expected Update() to return a WPF type today, got {update.ReturnType.FullName}");
+
+        // The exact Phase 2a target: these are the two signatures Vec3/Mat3 must replace.
+        Assert.Equal(Matrix3DFullName, current.PropertyType.FullName);
+        Assert.Equal(Matrix3DFullName, update.ReturnType.FullName);
     }
 
     /// <summary>

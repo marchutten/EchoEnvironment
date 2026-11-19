@@ -38,25 +38,28 @@ internal static class AssertMath
     /// <summary>
     /// Compares all sixteen elements of a Matrix3D. Used to pin OrientationFilter.ToMatrix()'s
     /// exact layout, which is the highest-risk item in the Phase 2 Mat3 port.
+    /// Note the naming trap: WPF's Matrix3D exposes the fourth row's translation elements as
+    /// OffsetX/OffsetY/OffsetZ. M41/M42/M43 do not exist. Phase 2's Mat3 must decide what those
+    /// three slots are called, and this helper is what proves the port kept them.
     /// </summary>
-    public static void Matrix(Matrix3D actual, Matrix3D expected, double tolerance = Geometry)
+    public static void Matrix(Matrix3D expected, Matrix3D actual, double tolerance, string what)
     {
-        Close(expected.M11, actual.M11, tolerance, "M11");
-        Close(expected.M12, actual.M12, tolerance, "M12");
-        Close(expected.M13, actual.M13, tolerance, "M13");
-        Close(expected.M14, actual.M14, tolerance, "M14");
-        Close(expected.M21, actual.M21, tolerance, "M21");
-        Close(expected.M22, actual.M22, tolerance, "M22");
-        Close(expected.M23, actual.M23, tolerance, "M23");
-        Close(expected.M24, actual.M24, tolerance, "M24");
-        Close(expected.M31, actual.M31, tolerance, "M31");
-        Close(expected.M32, actual.M32, tolerance, "M32");
-        Close(expected.M33, actual.M33, tolerance, "M33");
-        Close(expected.M34, actual.M34, tolerance, "M34");
-        Close(expected.M41, actual.M41, tolerance, "M41");
-        Close(expected.M42, actual.M42, tolerance, "M42");
-        Close(expected.M43, actual.M43, tolerance, "M43");
-        Close(expected.M44, actual.M44, tolerance, "M44");
+        Close(expected.M11, actual.M11, tolerance, $"{what}.M11");
+        Close(expected.M12, actual.M12, tolerance, $"{what}.M12");
+        Close(expected.M13, actual.M13, tolerance, $"{what}.M13");
+        Close(expected.M14, actual.M14, tolerance, $"{what}.M14");
+        Close(expected.M21, actual.M21, tolerance, $"{what}.M21");
+        Close(expected.M22, actual.M22, tolerance, $"{what}.M22");
+        Close(expected.M23, actual.M23, tolerance, $"{what}.M23");
+        Close(expected.M24, actual.M24, tolerance, $"{what}.M24");
+        Close(expected.M31, actual.M31, tolerance, $"{what}.M31");
+        Close(expected.M32, actual.M32, tolerance, $"{what}.M32");
+        Close(expected.M33, actual.M33, tolerance, $"{what}.M33");
+        Close(expected.M34, actual.M34, tolerance, $"{what}.M34");
+        Close(expected.OffsetX, actual.OffsetX, tolerance, $"{what}.OffsetX");
+        Close(expected.OffsetY, actual.OffsetY, tolerance, $"{what}.OffsetY");
+        Close(expected.OffsetZ, actual.OffsetZ, tolerance, $"{what}.OffsetZ");
+        Close(expected.M44, actual.M44, tolerance, $"{what}.M44");
     }
 
     /// <summary>
