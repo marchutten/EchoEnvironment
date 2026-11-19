@@ -1,11 +1,18 @@
-using System.Globalization;
+﻿using System.Globalization;
 
-namespace EchoEnvironment;
+namespace EchoEnvironment.Core;
 
 /// <summary>
 /// Parses a line of separated distance values (mm) into a frame. Accepts 16 (4x4) or 64 (8x8) values.
+///
+/// PHASE 2 NOTE: moved verbatim from the WPF App project. The logic is byte-for-byte identical,
+/// including the quirks that the characterization tests pin as deliberate rather than as bugs:
+///   - 25 and 73 values are LEGAL inputs meaning "16/64 zones + 9 IMU values".
+///   - negative millimetres are accepted.
+///   - space is a separator, so "1 15" silently becomes two zones rather than one malformed value.
+/// Changing any of those is a behaviour change to be negotiated with the firmware, not a refactor.
 /// </summary>
-internal static class SensorFrameParser
+public static class SensorFrameParser
 {
     private static readonly char[] Separators = [',', ';', ' ', '\t'];
 

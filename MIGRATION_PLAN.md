@@ -582,3 +582,68 @@ Roughly **110 test cases** across 4 classes (the parser theory cases expand), pl
 ### Consequence for the sequencing rule
 
 §3 rule 1 says *"Never do Phase 5 before Phase 1."* The same logic now blocks **Phase 2**: without a green test run, Phase 2's gate ("tests green **unchanged**") has nothing to compare against, and the `Mat3` layout risk in §4 — rated **High likelihood / High impact** — would be guarded only by tests that have never executed. **Phase 2 must not start until the manual reload above is done and the suite is green.**
+
+---
+
+## 9. Phase 2 record — code complete, gate NOT verified (⛔ see §9.4)
+
+§8's blocker was resolved by the manual solution reload: the suite ran and Phase 1's gate passed — **117 tests, 116 passed, 0 failed, 1 skipped** (`8e19f97`). Five defects surfaced on first execution, all in test code, none in production; see the `8e19f97` commit message. The most instructive: **WPF's `Matrix3D` has no `M41`/`M42`/`M43`** — the fourth row's translation elements are `OffsetX`/`OffsetY`/`OffsetZ`. `M44` does exist, which is why only three of four looked-wrong lines failed to compile.
+
+### 9.1 What Phase 2 created
+
+| File | Contents |
+|---|---|
+| `EchoEnvironment.Core/EchoEnvironment.Core.csproj` | **`net10.0`**, no `UseWPF`, no package references |
+| `EchoEnvironment.Core/Vec3.cs` | Core's vector: `LengthSquared`, `Length`, `Normalized()`, `Cross`, `+ - * /` |
+| `EchoEnvironment.Core/Mat3.cs` | Core's 3×3 rotation, row-major row-vector, `CreateOrientation(east, up, north)` |
+| `EchoEnvironment.Core/WorldFrame.cs` | Single source of the axis convention: `East`, `Up`, `North`, `South`, `SensorLookAxis` |
+| `EchoEnvironment.Core/OrientationFilter.cs` | Moved from App; `Vector3D`→`Vec3`, `Matrix3D`→`Mat3`, `internal`→`public` |
+| `EchoEnvironment.Core/SensorFrameParser.cs` | Moved from App; logic byte-for-byte identical |
+| `EchoEnvironment/WpfMath.cs` | The only Core↔WPF conversion point: `ToMatrix3D`, `ToVector3D`, `ToVec3` |
+| `EchoEnvironment.Tests/WpfMathTests.cs` | The §4 mitigation for the High/High layout risk: round-trip, transpose detector, mirrored-scene detector |
+| `EchoEnvironment.Tests/ArchitectureInvariantTests.cs` | **Un-skipped.** 7 guards, 0 skipped |
+| `Directory.Build.props` | `TargetFramework` **removed** (§7.4 follow-up 1) |
+| `EchoEnvironment/MainWindow.xaml.cs` | `SetOrientation(Mat3)`; converts once internally; angle readout reads `Mat3` |
+
+`InternalsVisibleTo` was deleted from the App csproj — the tests now reference Core directly, so the seam is no longer needed.
+
+### 9.2 Four deliberate deviations from the plan's own text
+
+1. **`public void Normalize()` on a `readonly struct` does not compile.** §2a specifies it. In a readonly struct no member may assign an instance field. `Vec3.Normalized()` returns a new value instead. This is also safer: WPF's `Vector3D.Normalize()` mutated a struct in place.
+2. **`WpfMath` is in the App project, not `EchoEnvironment.Rendering/Math/`.** That project does not exist until Phase 5. It moves with it.
+3. **`WpfMath`'s namespace is `EchoEnvironment`, not `EchoEnvironment.Math`.** A namespace named `Math` shadows `System.Math` in every file that imports it, and `MainWindow` uses `Math.Abs` throughout.
+4. **`Mat3` models rotation only — it has no fourth row.** `Matrix3D`'s `M14/M24/M34/OffsetX/OffsetY/OffsetZ/M44` are supplied by the adapter, not by Core. Core cannot accidentally carry a translation it was never meant to have. `Mat3.Identity` likewise does not exist in Core (nothing in production needs one); the tests declare their own.
+
+### 9.3 Two defects found by review *before* any test ran
+
+Both were in the new architecture guards, and both would have made a guard assert nothing:
+
+1. **`Assert.DoesNotContain("-windows", targetFramework)` would never fire.** A `net10.0-windows` assembly reports `FrameworkName` as `.NETCoreApp,Version=v10.0; Platform=Windows, Version=...` — it does **not** contain the substring `-windows`. The test would have passed under exactly the drift it exists to catch (§7.4's silent-TFM problem). Now asserts the absence of `Platform=`.
+2. **`WpfConversionIsConfinedToOneType` would have failed on `App`.** It filtered public types in namespace `EchoEnvironment` to those with WPF signatures, then required each to be `WpfMath` or `MainWindow`. `App` is also in that namespace and inherits `System.Windows.Application`, so it has WPF members. Rewritten to allow `WpfMath` and any type that *is* a UI type, and to fail on anything else.
+
+### 9.4 ⛔ The gate is not verified — `EchoEnvironment.Core` is not loaded in the solution
+
+**No Phase 2 test has been compiled or executed.** Same root cause as §8, same class of failure:
+
+`EchoEnvironment.slnx` on disk lists **three** projects; the loaded solution reports **two** (`EchoEnvironment`, `EchoEnvironment.Tests`). `EchoEnvironment.Core` is absent, so both `ProjectReference`s to it fail to resolve:
+
+```
+Unable to find project information for '...\EchoEnvironment.Core\EchoEnvironment.Core.csproj'.
+If you are using Visual Studio, this may be because the project is unloaded or not part of
+the current solution so run a restore from the command-line.
+```
+
+Tried and failed: rewriting `.slnx` (with and without a comment), deleting `.dtbcache.v2`, `.futdcache.v2`, and all three `.vs/ProjectEvaluation/*.v10.bin` files, and `set_file_project_status` on the Core csproj (`Project not found in solution`). **There is no automated fix.**
+
+**Required manual step:** close and reopen `EchoEnvironment.slnx` (or right-click the solution → **Reload Solution**), confirm `EchoEnvironment.Core` appears in Solution Explorer, then **Add → Existing Project…** if it does not. Restore, build, run all tests.
+
+### 9.5 What to expect when it runs
+
+- **Expected count: ~135 tests, 0 skipped.** Phase 1's 117 (116 + 1 now un-skipped) plus 7 new architecture guards plus 8 `WpfMathTests` cases (the theory expands to 5). A count near 117 means Core did not load. A skipped test means the un-skip did not take.
+- **The un-skipped guard is the one most likely to fail first**, because it is the only test asserting something that has never been proven: that Core compiles WPF-free. If `CoreAssemblyReferencesNoWpfAssembly` fails, the cause is a `ProjectReference` leaking a WPF reference into Core — fix the reference, do not weaken the assertion.
+- **`MainWindow` is still 758 lines.** Phase 2 only changed `SetOrientation`'s signature and one `using`. The thinning is Phase 6b.
+- **The gate's third clause — "app renders identically" — has not been checked at all**, and cannot be checked by any test. §4 rates a `Mat3`/`Matrix3D` layout divergence High/High precisely because a mirrored scene renders plausibly. `WpfMathTests` is the automated mitigation; a visual before/after comparison is still required and is still outstanding.
+
+### 9.6 Consequence for sequencing
+
+**Phase 3 must not start until §9.4 is resolved and the suite is green.** Phase 3 extracts `Hardware` on top of Core; building it on an unverified Core means the High/High layout risk is guarded only by tests that have never executed.

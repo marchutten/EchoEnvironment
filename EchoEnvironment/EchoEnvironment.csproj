@@ -3,8 +3,6 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
@@ -14,12 +12,10 @@
 
   <ItemGroup>
     <!--
-      Phase 1 seam: lets EchoEnvironment.Tests reach the internal domain classes
-      (SensorFrameParser, OrientationFilter) while they still live in this assembly.
-      Phase 2 moves them into EchoEnvironment.Core, where they become public; this
-      item can then be deleted.
+      Phase 2: the domain logic now lives in EchoEnvironment.Core (plain net10.0, no WPF).
+      The App is allowed to see WPF; Core is not. WpfMath.cs is the only conversion point.
     -->
-    <InternalsVisibleTo Include="EchoEnvironment.Tests" />
+    <ProjectReference Include="..\EchoEnvironment.Core\EchoEnvironment.Core.csproj" />
   </ItemGroup>
 
 </Project>

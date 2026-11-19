@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using EchoEnvironment.Core;
 using Xunit;
 
 namespace EchoEnvironment.Tests;
@@ -6,9 +7,10 @@ namespace EchoEnvironment.Tests;
 /// <summary>
 /// Characterization tests for <see cref="SensorFrameParser"/>.
 ///
-/// These pin CURRENT behaviour so that Phase 2 (moving the class into EchoEnvironment.Core) can be
-/// proven to change nothing. Where the current behaviour is a deliberate quirk or an unvalidated
-/// hole, the test name and comment say so — a future reader must not "fix" it silently.
+/// These pinned CURRENT behaviour so that Phase 2 (moving the class into EchoEnvironment.Core)
+/// could be proven to change nothing. They passed before the move and pass after it, unchanged -
+/// which is the point. Where the current behaviour is a deliberate quirk or an unvalidated hole,
+/// the test name and comment say so; a future reader must not "fix" it silently.
 /// </summary>
 public class SensorFrameParserTests
 {

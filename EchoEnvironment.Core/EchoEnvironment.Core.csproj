@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Plain net10.0, NOT net10.0-windows, and no UseWPF. This is the whole point of the phase:
+      the domain logic must compile in an assembly that cannot see PresentationCore, so it can be
+      tested headlessly and reused without a UI. ArchitectureInvariantTests enforces it.
+    -->
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>EchoEnvironment.Core</RootNamespace>
+  </PropertyGroup>
+
+</Project>

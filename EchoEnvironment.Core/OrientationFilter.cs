@@ -1,13 +1,16 @@
-using System.Windows.Media.Media3D;
-
-namespace EchoEnvironment;
+﻿namespace EchoEnvironment.Core;
 
 /// <summary>
 /// Complementary filter for ITG3200 (gyro), BMA180 (accel) and HMC5883L (mag).
 /// Tracks the world axes (east, up, north) as seen from the sensor frame. The gyro propagates them
 /// between frames; accelerometer (gravity) and magnetometer (north) slowly pull them back.
+///
+/// PHASE 2 NOTE: this is the same class that used to live in the WPF App project using
+/// Vector3D/Matrix3D. It now uses Core's own Vec3/Mat3 so that it compiles in an assembly with no
+/// WPF reference at all. The arithmetic is unchanged, line for line. Convert the result to a
+/// Matrix3D only at the UI boundary, via WpfMath.ToMatrix3D.
 /// </summary>
-internal sealed class OrientationFilter
+public sealed class OrientationFilter
 {
     private const double GyroLsbPerDegreePerSecond = 14.375;
     private const int CalibrationSamples = 50;
@@ -15,16 +18,24 @@ internal sealed class OrientationFilter
     private const double BiasAdaptationRate = 0.02;
     private const double CorrectionTimeConstantSeconds = 0.5;
 
-    private Vector3D _up = new(0, 1, 0);
-    private Vector3D _east = new(1, 0, 0);
-    private Vector3D _north = new(0, 0, -1);
-    private Vector3D _gyroBias;
-    private Vector3D _gyroBiasSum;
+    private Vec3 _up = WorldFrame.Up;
+    private Vec3 _east = WorldFrame.East;
+    private Vec3 _north = WorldFrame.North;
+    private Vec3 _gyroBias;
+    private Vec3 _gyroBiasSum;
     private int _calibrationCount;
     private bool _initialized;
 
-    public Matrix3D Current => ToMatrix();
+    public Mat3 Current => Mat3.CreateOrientation(_east, _up, _north);
 
+    /// <summary>
+    /// Re-arms the filter for a new connection.
+    ///
+    /// FINDING pinned by Reset_DoesNotClearTheOrientationAxes_StalePoseIsStillReported: this does
+    /// NOT clear _up/_east/_north, so Current keeps reporting the pose measured before the Reset
+    /// until a valid frame arrives. MainWindow calls this on every reconnect. Preserved verbatim
+    /// from the pre-extraction behaviour; changing it is a behaviour change, not a refactor.
+    /// </summary>
     public void Reset()
     {
         _initialized = false;
@@ -37,27 +48,26 @@ internal sealed class OrientationFilter
     /// imu: gyro x y z, accel x y z, mag x y z (raw counts). dt in seconds.
     /// Returns a matrix that rotates sensor-frame points into the world frame (X east, Y up, -Z north).
     /// </summary>
-    public Matrix3D Update(int[] imu, double dt)
+    public Mat3 Update(int[] imu, double dt)
     {
-        var gyro = new Vector3D(imu[0], imu[1], imu[2]);
-        var accel = new Vector3D(imu[3], imu[4], imu[5]);
-        var mag = new Vector3D(imu[6], imu[7], imu[8]);
+        var gyro = new Vec3(imu[0], imu[1], imu[2]);
+        var accel = new Vec3(imu[3], imu[4], imu[5]);
+        var mag = new Vec3(imu[6], imu[7], imu[8]);
 
         if (accel.LengthSquared < 1 || mag.LengthSquared < 1)
         {
-            return ToMatrix();
+            return Current;
         }
 
-        Vector3D upMeasured = accel;
-        upMeasured.Normalize();
-        Vector3D eastMeasured = Vector3D.CrossProduct(mag, upMeasured);
+        Vec3 upMeasured = accel.Normalized();
+        Vec3 eastMeasured = Vec3.Cross(mag, upMeasured);
         if (eastMeasured.LengthSquared < 1e-6)
         {
-            return ToMatrix();
+            return Current;
         }
 
-        eastMeasured.Normalize();
-        Vector3D northMeasured = Vector3D.CrossProduct(upMeasured, eastMeasured);
+        eastMeasured = eastMeasured.Normalized();
+        Vec3 northMeasured = Vec3.Cross(upMeasured, eastMeasured);
 
         if (!_initialized)
         {
@@ -65,12 +75,12 @@ internal sealed class OrientationFilter
             _north = northMeasured;
             _east = eastMeasured;
             _initialized = true;
-            return ToMatrix();
+            return Current;
         }
 
         dt = Math.Clamp(dt, 0, 0.5);
 
-        Vector3D omega = default;
+        Vec3 omega = default;
         if (_calibrationCount < CalibrationSamples)
         {
             _gyroBiasSum += gyro;
@@ -83,7 +93,7 @@ internal sealed class OrientationFilter
         else
         {
             double toRadians = Math.PI / 180.0 / GyroLsbPerDegreePerSecond;
-            Vector3D delta = gyro - _gyroBias;
+            Vec3 delta = gyro - _gyroBias;
             if (delta.Length < StationaryThresholdCounts)
             {
                 // Board is at rest: track the bias slowly and ignore noise.
@@ -96,31 +106,15 @@ internal sealed class OrientationFilter
         }
 
         // A fixed world vector seen from a body rotating with omega changes as dw/dt = -omega x w.
-        _up -= Vector3D.CrossProduct(omega, _up) * dt;
-        _north -= Vector3D.CrossProduct(omega, _north) * dt;
+        _up -= Vec3.Cross(omega, _up) * dt;
+        _north -= Vec3.Cross(omega, _north) * dt;
 
         double alpha = 1 - Math.Exp(-dt / CorrectionTimeConstantSeconds);
-        _up = Normalized(_up * (1 - alpha) + upMeasured * alpha);
-        _north = Normalized(_north * (1 - alpha) + northMeasured * alpha);
+        _up = (_up * (1 - alpha) + upMeasured * alpha).Normalized();
+        _north = (_north * (1 - alpha) + northMeasured * alpha).Normalized();
 
-        _east = Normalized(Vector3D.CrossProduct(_north, _up));
-        _north = Vector3D.CrossProduct(_up, _east);
-        return ToMatrix();
-    }
-
-    private static Vector3D Normalized(Vector3D v)
-    {
-        v.Normalize();
-        return v;
-    }
-
-    private Matrix3D ToMatrix()
-    {
-        // Row vectors: v' = v * M, so row j holds where sensor axis j ends up in (east, up, -north).
-        return new Matrix3D(
-            _east.X, _up.X, -_north.X, 0,
-            _east.Y, _up.Y, -_north.Y, 0,
-            _east.Z, _up.Z, -_north.Z, 0,
-            0, 0, 0, 1);
+        _east = Vec3.Cross(_north, _up).Normalized();
+        _north = Vec3.Cross(_up, _east);
+        return Current;
     }
 }

@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
+using EchoEnvironment.Core;
 
 namespace EchoEnvironment
 {
@@ -86,10 +87,14 @@ namespace EchoEnvironment
 
         /// <summary>
         /// Sets the sensor viewport (e.g. from a 9 DOF sensor) as a sensor-to-world rotation matrix.
+        ///
+        /// Takes Core's Mat3 and converts to WPF's Matrix3D exactly once, here. The angle readout
+        /// below reads Mat3 directly: the angles are a property of the orientation, not of whichever
+        /// matrix type the UI happens to render with.
         /// </summary>
-        public void SetOrientation(Matrix3D rotation)
+        public void SetOrientation(Mat3 rotation)
         {
-            _orientation.Matrix = rotation;
+            _orientation.Matrix = rotation.ToMatrix3D();
 
             // Forward is the sensor's -Z axis; world axes are X east, Y up, Z south.
             double heading = Math.Atan2(-rotation.M31, rotation.M33) * 180.0 / Math.PI;

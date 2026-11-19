@@ -1,4 +1,4 @@
-﻿using System.Windows.Media.Media3D;
+﻿using EchoEnvironment.Core;
 using Xunit;
 
 namespace EchoEnvironment.Tests;
@@ -31,15 +31,18 @@ namespace EchoEnvironment.Tests;
 ///   atan2(-M31, M33) = compass heading of the look direction, 0 = north, 90 = east. Correct.
 ///
 /// So the fix is a two-token change in the format string, and these tests are what make it safe.
+///
+/// PHASE 2 NOTE: these expressions now read Core's Mat3 directly, which is what they should always
+/// have done - the angles are a property of the orientation, not of WPF's matrix type.
 /// </summary>
 public class OrientationAngleMappingTests
 {
     private const double Tolerance = 1e-5;
 
-    private sealed record Pose(Vector3D X, Vector3D Y, Vector3D Z)
+    private sealed record Pose(Vec3 X, Vec3 Y, Vec3 Z)
     {
-        public Vector3D UpInSensor => new(X.Y, Y.Y, Z.Y);
-        public Vector3D NorthInSensor => new(-X.Z, -Y.Z, -Z.Z);
+        public Vec3 UpInSensor => new(X.Y, Y.Y, Z.Y);
+        public Vec3 NorthInSensor => new(-X.Z, -Y.Z, -Z.Z);
     }
 
     /// <summary>Level, looking north.</summary>
@@ -51,7 +54,7 @@ public class OrientationAngleMappingTests
     /// <summary>Level, looking south.</summary>
     private static readonly Pose LevelSouth = new(new(-1, 0, 0), new(0, 1, 0), new(0, 0, -1));
 
-    /// <summary>Level, looking straight down (sensor -Z points at the ground).</summary>
+    /// <summary>Level and looking straight down (sensor -Z points at the ground).</summary>
     private static readonly Pose LookingDown = new(new(1, 0, 0), new(0, 0, -1), new(0, 1, 0));
 
     /// <summary>
@@ -70,7 +73,7 @@ public class OrientationAngleMappingTests
     private static readonly Pose PitchedUp345 = new(
         new(1, 0, 0), new(0, 0.8, 0.6), new(0, -0.6, 0.8));
 
-    private static Matrix3D MatrixFor(Pose pose)
+    private static Mat3 MatrixFor(Pose pose)
     {
         // Counts are scaled well above what a real BMA180/HMC5883L produces so that rounding a
         // non-integer component (only Rolled30 has one) contributes at most ~5e-8 relative error,
@@ -88,9 +91,9 @@ public class OrientationAngleMappingTests
     }
 
     // The three expressions, copied verbatim from MainWindow.SetOrientation.
-    private static double Heading(Matrix3D m) => Math.Atan2(-m.M31, m.M33) * 180.0 / Math.PI;
-    private static double PitchVariable(Matrix3D m) => Math.Asin(Math.Clamp(-m.M32, -1, 1)) * 180.0 / Math.PI;
-    private static double RollVariable(Matrix3D m) => Math.Atan2(m.M12, m.M22) * 180.0 / Math.PI;
+    private static double Heading(in Mat3 m) => Math.Atan2(-m.M31, m.M33) * 180.0 / Math.PI;
+    private static double PitchVariable(in Mat3 m) => Math.Asin(Math.Clamp(-m.M32, -1, 1)) * 180.0 / Math.PI;
+    private static double RollVariable(in Mat3 m) => Math.Atan2(m.M12, m.M22) * 180.0 / Math.PI;
 
     /// <summary>
     /// The `pitch` variable really is the elevation of the look direction, for poses whose true
@@ -105,13 +108,13 @@ public class OrientationAngleMappingTests
     [InlineData(nameof(PitchedUp345), 36.8698976)]
     public void PitchVariable_IsTheLookDirectionElevation(string poseName, double expectedElevation)
     {
-        Matrix3D m = MatrixFor(PoseByName(poseName));
+        Mat3 m = MatrixFor(PoseByName(poseName));
 
         AssertMath.Close(expectedElevation, PitchVariable(m), Tolerance, $"{poseName}: asin(-M32)");
 
         // Independent confirmation straight from the matrix: transform the sensor's look axis and
         // measure its world elevation. If the two disagree, the matrix layout is wrong, not the label.
-        Vector3D look = m.Transform(new Vector3D(0, 0, -1));
+        Vec3 look = AssertMath.Transform(m, WorldFrame.SensorLookAxis);
         double directElevation = Math.Asin(Math.Clamp(look.Y / look.Length, -1, 1)) * 180.0 / Math.PI;
         AssertMath.Close(directElevation, PitchVariable(m), Tolerance, $"{poseName}: asin(-M32) vs direct look elevation");
     }
@@ -129,7 +132,7 @@ public class OrientationAngleMappingTests
     [InlineData(nameof(Rolled30), 30.0)]
     public void RollVariable_IsRotationAboutTheOpticalAxis(string poseName, double expectedRoll)
     {
-        Matrix3D m = MatrixFor(PoseByName(poseName));
+        Mat3 m = MatrixFor(PoseByName(poseName));
 
         AssertMath.Close(expectedRoll, RollVariable(m), Tolerance, $"{poseName}: atan2(M12, M22)");
     }
@@ -141,8 +144,8 @@ public class OrientationAngleMappingTests
         // axis". A board rolled about its own optical axis while level is NOT rotated about the
         // world up axis, yet the roll expression reads 30 degrees. Conversely, a board whose
         // heading changes (a genuine rotation about the up axis) reads roll 0.
-        Matrix3D rolled = MatrixFor(Rolled30);
-        Matrix3D level = MatrixFor(LevelNorth);
+        Mat3 rolled = MatrixFor(Rolled30);
+        Mat3 level = MatrixFor(LevelNorth);
 
         // Compared against the unrolled board, so what is being proved is that the ROLL reading
         // changed while elevation and heading did not.
@@ -157,7 +160,7 @@ public class OrientationAngleMappingTests
 
         // Turning the board from north to east IS a rotation about the world up axis, and the roll
         // expression correctly reports 0 for it.
-        Matrix3D east = MatrixFor(LevelEast);
+        Mat3 east = MatrixFor(LevelEast);
         AssertMath.Close(0.0, RollVariable(east), Tolerance, "board facing east: roll must be 0");
         AssertMath.Close(90.0, Heading(east), Tolerance, "board facing east: heading");
     }
@@ -168,7 +171,7 @@ public class OrientationAngleMappingTests
     [InlineData(nameof(LevelSouth), 180.0)]
     public void HeadingVariable_IsCompassHeadingOfTheLookDirection(string poseName, double expectedHeading)
     {
-        Matrix3D m = MatrixFor(PoseByName(poseName));
+        Mat3 m = MatrixFor(PoseByName(poseName));
 
         double heading = Heading(m);
         if (heading < 0)
@@ -192,8 +195,8 @@ public class OrientationAngleMappingTests
     [Fact]
     public void DefectD1_CurrentFormatStringPrintsRollUnderThePitchLabel()
     {
-        Matrix3D rolled = MatrixFor(Rolled30);     // physically: roll 30, elevation 0
-        Matrix3D pitched = MatrixFor(PitchedUp345); // physically: roll 0, elevation 36.87
+        Mat3 rolled = MatrixFor(Rolled30);     // physically: roll 30, elevation 0
+        Mat3 pitched = MatrixFor(PitchedUp345); // physically: roll 0, elevation 36.87
 
         // MainWindow's format string, reproduced verbatim:
         //   "Pitch: {roll}" then "Roll: {pitch}"
@@ -221,8 +224,8 @@ public class OrientationAngleMappingTests
     [Fact]
     public void CorrectedMapping_PitchIsElevationAndRollIsOpticalAxisRotation()
     {
-        Matrix3D rolled = MatrixFor(Rolled30);
-        Matrix3D pitched = MatrixFor(PitchedUp345);
+        Mat3 rolled = MatrixFor(Rolled30);
+        Mat3 pitched = MatrixFor(PitchedUp345);
 
         // After Phase 6a: Pitch == asin(-M32), Roll == atan2(M12, M22).
         AssertMath.Close(0.0, PitchVariable(rolled), Tolerance, "corrected Pitch for a rolled board");

@@ -1,9 +1,15 @@
 <Project>
   <PropertyGroup>
-	<TargetFramework>net10.0-windows</TargetFramework>
-	<Nullable>enable</Nullable>
-	<ImplicitUsings>enable</ImplicitUsings>
-	<LangVersion>latest</LangVersion>
-	<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!--
+      TargetFramework is deliberately NOT set here (MIGRATION_PLAN 7.4). Inheriting
+      net10.0-windows made EchoEnvironment.Core's plain-net10.0 override an implicit, silent
+      requirement: a Core project that forgot the override would still build green and pass
+      every test while the "Core cannot see WPF" guarantee was quietly gone. Each csproj now
+      declares its own TFM, where it is visible and intentional.
+    -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 </Project>

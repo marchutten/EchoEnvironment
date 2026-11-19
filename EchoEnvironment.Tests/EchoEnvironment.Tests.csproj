@@ -1,6 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!--
+      net10.0-windows + UseWPF is still required here, but only because this project also tests
+      WpfMath, the adapter, and MainWindow's angle readout. The Core tests themselves need nothing
+      WPF; that separation is what ArchitectureInvariantTests enforces on Core.
+    -->
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <IsPackable>false</IsPackable>
@@ -14,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      Direct reference to Core: the domain tests exercise Core, not the App.
+      Reference to the App: WpfMath and MainWindow's angle expressions.
+    -->
+    <ProjectReference Include="..\EchoEnvironment.Core\EchoEnvironment.Core.csproj" />
     <ProjectReference Include="..\EchoEnvironment\EchoEnvironment.csproj" />
   </ItemGroup>
 
