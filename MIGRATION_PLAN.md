@@ -155,7 +155,7 @@ Do this first so every later diff is *only* code.
 
 **`TreatWarningsAsErrors` did not bite.** Flowing into restore policy (`allWarningsAsErrors: true` in `nuget.dgspec.json`), still succeeded. Generated WPF markup (`App.g.cs`, `MainWindow.g.cs`, `MainWindow.baml`) compiled clean. Still true through Phase 2, including the test project with xunit analyzers.
 
-**Gate caveat:** the build tool cannot force a configuration switch, so the gate was proven in **Debug only**. No `bin/Release/` artifacts exist. Confirm a Release build manually before relying on it. **This caveat has now survived Phases 1 and 2 unaddressed — see §7.5.**
+**Gate caveat (originally Debug-only) — now closed.** The build tool available during Phase 0 could not force a configuration switch, so this gate was originally proven in **Debug only**. It was re-run in Release after Phase 2: 0 errors / 0 warnings, Release artifacts present for all three projects, and the full 130-test suite green in Release. See §7.5.
 
 **Five findings that change later phases — see §7.** (7.1 and 7.4 are the consequential ones.)
 
@@ -613,19 +613,34 @@ This was the significant one. `Directory.Build.props` set `net10.0-windows` for 
 
 **§7.4's core warning is now defused but not by the TFM.** The TFM is still only a proxy. What actually protects the invariant is the test, and it now runs on every suite execution.
 
-### 7.5 Gate was proven in Debug only — ⚠️ STILL OUTSTANDING
+### 7.5 Gate was proven in Debug only — ✅ CLOSED (Release build verified)
 
-The build tool exposes no configuration switch. Three builds succeeded with 0 errors / 0 warnings and produced `bin/Debug/net10.0-windows/EchoEnvironment.exe`, but **no `bin/Release/` artifacts exist**. The Phase 0 gate ("build green") is satisfied for Debug.
-
-**This has now survived Phases 1 and 2 unaddressed.** Every green result recorded in §8 and §9 is a Debug result. Run a Release build manually — the cost is one command, and the failure mode it is guarding against (a Release-only warning that `TreatWarningsAsErrors` turns into an error, or a Release-only analyzer complaint in the test project) has so far never been exercised.
-
-**Re-attempted after Phase 2; confirmed unfixable with the available tooling rather than left as a to-do.** The build tool exposes only `project_name` and `timeout_seconds` — there is no configuration parameter — and it built Debug, verified empirically: Debug artifacts present for all three projects, `bin\Release\` probed and absent for all three, including the `.pdb`. `run_tests` explicitly assumes a Debug build. So this is not a gap that a different prompt would close; it requires a terminal:
+**Resolved after Phase 2, before Phase 3.** A second MCP server was connected alongside the original one, and it exposes `build_configuration_get` / `build_configuration_set` — the capability the original toolset genuinely lacked. The gate was then re-run in Release:
 
 ```bash
-dotnet build EchoEnvironment.slnx -c Release
+build_configuration_set  configuration="Release"  platform="Any CPU"
+build_solution
+build_status
+build_configuration_set  configuration="Debug"    platform="Any CPU"
 ```
 
-Worth doing before Phase 3 adds a fourth project that inherits `TreatWarningsAsErrors`, because a Release-only warning surfacing for the first time in Phase 5 would be attributed to the rendering work.
+`build_status` → `State: Done`, `FailedProjects: 0`. Error List → **0 errors, 0 warnings, 0 messages**, checked separately against both the `build` and `intellisense` sources.
+
+Release artifacts confirmed on disk for all three projects:
+
+| Project | `bin/Release/<TFM>` | Contents |
+|---|---|---|
+| `EchoEnvironment` | `net10.0-windows` | `EchoEnvironment.exe`, `.dll`, `.pdb`, `EchoEnvironment.Core.dll`/`.pdb`, `System.IO.Ports.dll`, `deps.json`, `runtimeconfig.json`, `runtimes/` |
+| `EchoEnvironment.Core` | **`net10.0`** | `EchoEnvironment.Core.dll` + `.pdb` + `deps.json` — **no WPF assembly, no `System.IO.Ports`** |
+| `EchoEnvironment.Tests` | `net10.0-windows` | `EchoEnvironment.Tests.dll` + all three project `.pdb` + xunit / TestPlatform runners |
+
+**Core's Release output folder is `net10.0`, not `net10.0-windows`.** That is direct on-disk evidence for §7.4's claim that the TFM is the load-bearing difference between Core and the WPF projects, and it corroborates the `CoreAssemblyReferencesNoWpfAssembly` guard from outside the test itself.
+
+**The full suite was then run in Release: 130 passed, 0 failed, 0 skipped.** The §8 and §9 green record is therefore no longer Debug-only.
+
+**The failure mode this gate was guarding against was exercised and did not occur.** No Release-only warning appeared, so `TreatWarningsAsErrors` had nothing to escalate, and no Release-only analyzer complaint appeared in the test project. Phase 3 can add a fourth project inheriting `TreatWarningsAsErrors` without the §7.5 risk of a Phase 5 rendering change being blamed for a pre-existing Release-only defect.
+
+**Retained as a lesson, not as a to-do:** the earlier conclusion that this was "confirmed impossible with the available tooling" was accurate for the toolset available at the time — that build tool really did expose only `project_name` and `timeout_seconds`. It was a tooling gap, not a plan defect, and it was closed by connecting a second server rather than by rephrasing the request. When a verification step is blocked, record *which* capability is missing; that is what makes it findable later.
 
 ---
 
@@ -786,7 +801,7 @@ Git does not track empty directories, so it is invisible to `git status` and app
 ### 9.9 Open obligations carried into Phase 3
 
 1. ~~**Visual before/after render comparison for Phase 2**~~ ✅ **DONE** — the app was run after Phase 2 and renders and behaves correctly. What that does and does not prove is recorded in §9.5; Phase 5's stricter pixel-compare bar is still open.
-2. **Release build has never been run** (§7.5). Re-attempted after Phase 2 and **confirmed impossible with the available build tool** — it has no configuration parameter and builds Debug. Needs `dotnet build EchoEnvironment.slnx -c Release` in a terminal.
+2. ~~**Release build has never been run**~~ ✅ **DONE** — verified in Release after Phase 2 via `build_configuration_set`: 0 errors / 0 warnings, Release artifacts present for all three projects, and the full 130-test suite green in Release. See §7.5.
 3. ~~**`pre-refactor` tag was never created**~~ ✅ **It exists** — `pre-refactor` → `f3475a1` ("Code state before refactor"), the last commit before Phase 0. A better baseline than the `bc4413a` this plan recommended, since `bc4413a` already contains the plan itself.
 4. **Firmware confirmation of the 25/73-value quirk** (§4) has never been done.
 5. **Physical tilt to settle the Pitch/Roll labels** (§5, Phase 6a). The regression test exists; the human verification does not.
