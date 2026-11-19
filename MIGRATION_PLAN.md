@@ -1231,3 +1231,130 @@ run after commit 1 was reported as "seems to run fine" — a human eyeball check
 names, and it is unknown whether the grid/map toggles were exercised. **No run has happened since commit
 2**, which moved the camera drag, the key handler, the zone geometry, the heat grid and the map. Those
 are the exact things a visual check is for, and they are now the most exposed code in the migration.
+
+---
+
+## 12.10 First live-hardware run — and it is not the gate
+
+User-supplied window capture, live device on `COM12` at **115200 baud**, `Disconnect` shown (connected),
+`Show grid` **off**, `Keep map` **off**, `Render 60 Hz`.
+
+Status line: `Frames: 31 (64 zones, 64 visible, max 1540 mm) | gyro 11,42,-11 accel -126,-225,4438 mag -2…`
+
+### This is not the §12.1 comparison, and must not be recorded as though it were
+
+§12.1's baseline is a **disconnected** scene, and §12.1 line 1044 says so explicitly: it "cannot validate
+zone colours, lines, map accumulation or the grid." This capture is the opposite state — connected, IMU
+live, 64 zones populated. **A pixel diff against §12.1 is still impossible between these two states**, so
+the gate's literal clause remains open. What this capture provides instead is different and, for commit 2,
+more useful evidence.
+
+### What it does prove about commit 2 specifically
+
+Commit 2 is the commit that rewired the checkbox→render path: `keepMap` stopped being read from
+`KeepMapCheckBox.IsChecked` inside the renderer and became a **parameter**, and `ClearMap()` was added.
+Those are exactly the links a build and a test suite cannot see.
+
+| Control state | Expected render | Captured |
+|---|---|---|
+| `Keep map` **off** | no accumulated map cubes in the left view | **none present** ✓ |
+| `Show grid` **off** | no 3D raster in the left scene | **absent** ✓ |
+| `Render 60 Hz` | heat grid repainted every frame | **populated, 8×8, all 64 cells** ✓ |
+| IMU live | fan placed by sensor attitude | **fan points up**, matching a near-vertical board ✓ |
+
+`64 visible` is also self-consistent: `UpdateFrame` hides a zone outside `[MinDistanceMm=20, MaxDistanceMm=4000]`,
+and the reported max is 1540 mm, so all 64 are inside the window. The counter and the geometry agree.
+
+The heat grid being visible with `Show grid` **off** is correct, not a defect: `ShowGrid_Click` toggles only
+the 3D `_gridModel` in `SensorVisual`, and `HeatGrid` has no `Visibility` handling anywhere in the solution
+(`Visibility` has zero matches in every `.cs` and `.xaml` file). It is always visible and always repainted.
+
+### Finding 5 — defect D1 is now visible on real hardware, and the numbers prove it themselves
+
+Readout captured: `Heading: 334.2°  Pitch: -149.7°  Roll: -86.8°`.
+
+`MainWindow.SetOrientation` prints the `roll` variable under the **Pitch** label and the `pitch` variable
+under the **Roll** label (line 133), with **no comment anywhere in the file** explaining the pairing. The
+two expressions have different ranges, and that is what makes the capture self-evidencing:
+
+- `pitch = asin(-M32)` is **bounded to ±90°**. It is printed under **Roll**, reading **-86.8°**.
+- `roll = atan2(M12, M22)` is **unbounded**. It is printed under **Pitch**, reading **-149.7°**.
+
+**-149.7° cannot be a pitch.** A pitch of a board is tilt from horizontal, which cannot exceed 90°. The
+value in the Pitch slot is outside the range the quantity it claims to report can take, so the label is
+demonstrably wrong from the screenshot alone — without needing to know how the board was held. Meanwhile
+the bounded value sitting at -86.8° in the Roll slot is the tilt, and it says the board was held nearly
+vertical.
+
+`OrientationAngleMappingTests` already pins this numerically (`DefectD1_CurrentFormatStringPrintsRollUnderThePitchLabel`,
+and lines 205–216 which assert the two expressions "must measure different quantities or the label swap
+would be harmless"). §5 line 559 and §11.8 line 1014 have carried "the physical tilt has not been done"
+for four sections. **This capture is the closest that obligation has come to being met** — but it does not
+close it: the physical pose of the board is still unknown to the record, and 6a's human half is defined as
+confirming which label is wrong *in the user's terms*.
+
+### Finding 6 — defect D9 is also visible, and it is NOT a Phase 5 regression
+
+The capture's board view shows the labelled gizmo as **Z green up, Y blue right, X red down**. §12.1's
+baseline describes it as **green Y up, cyan Z into −Z**. That difference must not be read as a regression
+introduced by Phase 5:
+
+- The baseline had **no IMU data**, so `_orientation` was `Matrix3D.Identity`.
+- This capture has live attitude, and `AddAxes` (the letter-labelled gizmo) lives in `_boardGroup`, which
+  carries `CreateViewTransform(true, _orientation)` — so it **rotates with the sensor**.
+- `CreateWorldAxes` (unlabelled thin boxes) lives in `boardRoot`, which is **untransformed** and stays fixed.
+
+So one viewport currently contains two axis conventions, one rotating with attitude and one fixed, and at a
+~87° tilt the disagreement is stark. That is defect **D9** (§5 line 448, Phase 5d), unchanged by the moves
+— §12.2 line 1091 already records that the two axis sets were deliberately moved as-is. This capture is the
+first time it is visible on real hardware, and it is the reason 5d changes pixels.
+
+### Finding 7 — the device's accelerometer scale does not match the test fixture's
+
+`accel -126,-225,4438` → magnitude **≈ 4445 counts**. `OrientationFilterTests` line 44:
+`IdealAccelCounts = 500.0; // 1 g`. The device reports **~8.9× the fixture's count-per-g**.
+
+Harmless today, and only because of a specific detail: `OrientationFilter` never converts accel to physical
+units — it calls `Normalized()` and the magnitude cancels. So attitude is unaffected. What is exposed:
+`StationaryThresholdCounts = 60` and the `LengthSquared < 1` guards are expressed **in raw counts**, and any
+future code that treats an accel value as a physical quantity would be wrong by that factor. The fixture
+that the filter tests are calibrated against is not the device's scale.
+
+Adjacent, unverified rather than asserted: `|gyro| ≈ 44.8` raw counts against `StationaryThresholdCounts = 60`,
+but the comparison is against `gyro - _gyroBias`, so whether the filter classifies this board as at rest
+depends on the learned bias. At **31 frames** the filter is also early in its life (`CalibrationSamples = 50`).
+These angles are early-run values and are worth re-reading after a longer run.
+
+### Finding 8 — the hardware is connected and the app cannot capture what it receives
+
+This is the actionable one. "Capture a real serial log" has been carried forward since Phase 3 (§2 line 371,
+§4 line 544, §10 line 859, §10.9 line 931, §11.8 line 1010, §12.8 line 1112) and is still unsatisfied.
+
+Verified by search across all four non-test projects: **no writer of any kind exists** — zero matches for
+`StreamWriter`, `TextWriter`, `FileStream`, `File.Create`, `File.OpenWrite`, `File.AppendAllText`,
+`SaveFileDialog`, `LogPath`. `SerialSensorStream` reads and discards (`_framer.Append(port.ReadExisting())`).
+`ReplaySensorStream` can only **read** a log, and `MainWindow` never constructs it. The only
+`File.WriteAllText` in the solution is in a test.
+
+So the parity check cannot be closed even during a live session: **there is no path from the port to a file.**
+A real capture exists right now in the app's memory and is about to be thrown away.
+
+### Finding 9 — the status line is clipped
+
+The capture ends at `mag -2` because the window is too narrow for the string it produces. The status line is
+the app's only diagnostic surface and its last third is unreadable at this window width.
+
+### Evidence
+
+Build: Debug, whole solution, **0 errors / 0 warnings**, 5 projects.
+Tests: **222 / 222 passed / 0 failed / 0 skipped**.
+Run: live device, `COM12` @ 115200, 31 frames, 64/64 zones, max 1540 mm.
+
+### Gate status
+
+**Still open, unchanged in letter, changed in kind.** The pixel diff against §12.1 has still not been done
+and cannot be done against this capture — different scene state. What is now closed is weaker but real:
+commit 2's rewiring (checkbox→renderer→map) is demonstrated working on live data, which no test in the
+suite covers. **Save this capture as `docs/baseline/pre-phase5-connected.png`**: it is the only connected-state
+reference that exists, and Phase 5c/5d are about to change brushes, layers and axis labels — i.e. exactly
+what this image shows.
