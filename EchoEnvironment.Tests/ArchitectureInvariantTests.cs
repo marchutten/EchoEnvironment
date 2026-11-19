@@ -83,15 +83,19 @@ public class ArchitectureInvariantTests
         // ".NETCoreApp,Version=v10.0; Platform=Windows, Version=...". It does NOT contain the
         // substring "-windows", so searching for that would let the exact drift this test exists to
         // catch slip straight through. The marker to look for is "Platform=".
-        string? targetFramework = typeof(OrientationFilter).Assembly
+        string? declared = typeof(OrientationFilter).Assembly
             .GetCustomAttributes()
             .OfType<System.Runtime.Versioning.TargetFrameworkAttribute>()
             .FirstOrDefault()?
             .FrameworkName;
 
-        Assert.NotNull(targetFramework);
+        Assert.NotNull(declared);
 
-        Assert.True(targetFramework!.StartsWith(".NETCoreApp,Version=v10.0", StringComparison.Ordinal),
+        // Bound to a non-nullable local so every later dereference is warning-free: this project
+        // inherits TreatWarningsAsErrors, so a single CS8602 here would fail the build.
+        string targetFramework = declared!;
+
+        Assert.True(targetFramework.StartsWith(".NETCoreApp,Version=v10.0", StringComparison.Ordinal),
             $"Core must target .NET 10; got {targetFramework}.");
 
         Assert.True(!targetFramework.Contains("Platform=", StringComparison.Ordinal),
