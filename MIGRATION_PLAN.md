@@ -1,9 +1,9 @@
 ﻿# EchoEnvironment — Migration Plan
 
-**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `2c81aa2`, working tree clean, 11 commits ahead of `origin/main`, solution builds 0 errors / 0 warnings.
-**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ⚠ step 2d deferred to Phase 3 (§9.7) · **3 ← next** · 4–7 pending.
-**Test suite:** **130 tests, 130 passed, 0 failed, 0 skipped.**
-**Goal:** split the 763-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
+**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `9a71f4f`, 13 commits ahead of `origin/main`, **working tree NOT clean** — Phase 3's changes are uncommitted. Solution builds 0 errors / 0 warnings across **four** projects.
+**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · **3 ✅ code complete, gate PARTIALLY closed (§10)** · 4–7 pending.
+**Test suite:** **181 tests, 181 passed, 0 failed, 0 skipped** (was 130 before Phase 3).
+**Goal:** split the 755-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
 
 **Governing rule:** *seam first, then move.* Every phase must leave the app runnable and the build green. No phase may mix a behavior change with a structural move.
 
@@ -57,7 +57,7 @@ Chosen for **minimal churn**: the existing project directory is *not* moved, so 
 EchoEnvironment.slnx
 EchoEnvironment/                 → becomes the App (WPF, thin)      net10.0-windows   exists, NOT yet thin (763 lines)
 EchoEnvironment.Core/            ✅ CREATED in Phase 2               net10.0        ← no WPF, no System.IO.Ports
-EchoEnvironment.Hardware/        Phase 3                             net10.0-windows
+EchoEnvironment.Hardware/        ✅ CREATED in Phase 3 (§10)                net10.0-windows   ← owns System.IO.Ports; no UseWPF
 EchoEnvironment.Rendering/       Phase 5                             net10.0-windows
 EchoEnvironment.Tests/           ✅ CREATED in Phase 1               net10.0-windows
 Directory.Build.props            ✅ CREATED in Phase 0               (shared props, NO TargetFramework)
@@ -78,7 +78,7 @@ Hardware  ──→ Core
 Core      ──→ (nothing)
 ```
 
-Status: `Tests → Core` and `Tests → App` and `App → Core` exist. `Hardware` and `Rendering` do not yet exist. **The graph is currently acyclic and the contract holds**, but nothing in the graph yet prevents `Hardware` from referencing `Rendering` when Phase 3 creates it — that edge must be kept out deliberately.
+Status after Phase 3: `Tests → Core`, `Tests → Hardware`, `Tests → App`, `App → Core`, `App → Hardware` and `Hardware → Core` all exist. `Rendering` still does not. **The graph is acyclic and the contract holds, and it is now enforced by a test rather than by care:** `HardwareAssemblyReferencesNothingButCore` fails if Hardware acquires a reference to the App or to Rendering, *and* fails if Hardware stops referencing `System.IO.Ports` (§10.6). The edge this section warned about — nothing in the graph preventing `Hardware → Rendering` — is now closed by that guard rather than left to vigilance.
 
 Enforced rule: **`Core` must never reference a `WindowsBase`/`PresentationCore`/`PresentationFramework` type.** If a type needs `Point3D`, it belongs in `Rendering`. This is now enforced by a test, not by convention (§9.5).
 
@@ -313,7 +313,7 @@ This is what lets Phase 6 resolve the `AddAxes` vs `CreateWorldAxes` disagreemen
 
 ---
 
-### Phase 3 — Extract `EchoEnvironment.Hardware` (3 h) ← **NEXT**
+### Phase 3 — Extract `EchoEnvironment.Hardware` (3 h) ✅ CODE COMPLETE — gate partially closed, see §10
 
 **First step, before 3a:** introduce `SensorFrame` in Core (§2d, deferred here per §9.7). `ISensorStream.FrameReceived` in 3b is the consumer that needs it, so it should be written against a real caller rather than added speculatively.
 
@@ -498,7 +498,7 @@ protected override void OnStartup(StartupEventArgs e) {
 Phase 0  hygiene          → makes every later diff contain only code      ✅ done
 Phase 1  tests            → locks CURRENT behavior; must precede all moves ✅ done
 Phase 2  Core extraction  → the keystone; removes the WPF dependency       ✅ done, gate closed
-Phase 3  ISensorStream    → unlocks offline development                    ← next
+Phase 3  ISensorStream    → unlocks offline development                    ✅ code complete (§10)
 Phase 4  coalescing       → fixes the throughput ceiling
 Phase 5  Rendering        → only now is it safe to touch the visual tree
 Phase 6  ViewModel + D1   → behavior change isolated to its own commit
@@ -524,7 +524,7 @@ Phase 7  polish
 | Shared mutable `_orientation` `MatrixTransform3D` embedded in two visual trees breaks when a group is frozen | Medium | Medium | Keep the group unfrozen; document the invariant in `OrbitCameraController`. Do not call `Freeze()` on `_points` or `_boardGroup`. | ⬜ Untouched. `MainWindow` still holds `_orientation` as a shared `MatrixTransform3D`; `OrbitCameraController` does not exist until Phase 5. |
 | `TreatWarningsAsErrors` breaks the build on generated WPF markup code | Low | Low | Scope it per-project, or revert to warning-only. | ✅ **Did not bite** — 0 warnings across every build through Phase 2, including the test project with xunit analyzers. §7.3's prediction that it would bite at Phase 5 is still untested. |
 | `net10.0` Core accidentally references a WPF type | Medium | High | Add a build-time guard: an analyzer rule or a simple test asserting `typeof(OrientationFilter).Assembly.GetReferencedAssemblies()` contains no `PresentationCore`/`WindowsBase`. | ✅ **Done, and the recommended form was insufficient.** The literal suggestion — assert absence of `PresentationCore`/`WindowsBase` — was implemented first and **passed while asserting nothing**, because `Window`/`Application` live in `PresentationFramework`. See §9.4 item 2. The shipped guard covers all three assemblies from one shared list. |
-| Behavior drift in `LineFramer` (framing bugs = dropped/corrupted frames) | Medium | High | `LineFramer` gets its own test suite in Phase 3a, plus a `ReplaySensorStream` parity check against a real capture. | ⬜ Not started. Note the parity check needs a **real captured log**, which the repo does not have. Capture one during Phase 3's hardware session, before writing `ReplaySensorStream`. |
+| Behavior drift in `LineFramer` (framing bugs = dropped/corrupted frames) | Medium | High | `LineFramer` gets its own test suite in Phase 3a, plus a `ReplaySensorStream` parity check against a real capture. | 🟡 **Half done.** The test suite exists (16 tests) and its centrepiece replays 402 chunks through a verbatim copy of the old MainWindow algorithm, requiring identical lines in identical order and an identical drop count — so 3a's behaviour-neutrality is measured, not asserted. **The parity half is still open:** the parity check needs a **real captured log**, which the repo still does not have. Capture one during a hardware session before trusting `ReplaySensorStream`. See §10.5. |
 | **A test that asserts nothing is mistaken for protection** — *added after Phase 2* | **High** | High | Four such guards were written in Phase 2 and only revealed themselves by failing or by review: a `-windows` substring check that can never fire, a WPF-signature check matching only `WindowsBase`, a namespace filter that omitted `IsPublic`, and a cross-product assertion that was mathematically false. **A green suite is not evidence that the guards assert anything.** Review each guard by asking what would have to change for it to fail; if the answer is "nothing," it is decoration. | 🟡 **Ongoing discipline, not a one-time fix.** Applies to every guard added in Phases 3–6. |
 | **Solution state is unreliable** — *added after §8 and §9.4, which were the same failure twice* | Medium | Medium | `get_solution_overview` reported 1 project in §8 and 2 projects in every Phase 2 run, including green ones, while the `.slnx` on disk listed 3. Neither the overview nor the `.slnx` on disk proves a project is loaded. **Evidence that a project is loaded: its assembly was produced, and the test count matches expectation.** A test count *lower* than expected means discovery silently skipped something. | ✅ **Diagnosed and confirmed, §9.10.** Reopening the solution made the overview report **3** projects and all three built individually — so the disagreement was a stale in-memory solution, not a property of `.slnx`. The mitigation stands (verify by assembly + test count, expect the disagreement when Phase 3 adds a fourth project), but the fix is known to work: reopen, don't re-diagnose. |
 | **A manual "looks fine" check is mistaken for a pixel comparison** — *added when Phase 2's visual gate closed* | Medium | High | Phase 2's gate asked only that the app "renders identically", and a run-and-look is the right strength for that: a mirrored or transposed `Mat3` is glaring in a 3D view. Phase 5's gate asks for a **pixel diff**, and its changes are subtle by design (brush reuse, transform reuse, named layers, axis relabelling). Recording "I ran it and it looked fine" as satisfying both conflates two different bars. **Capture a reference screenshot before Phase 5 starts**, and state which bar each check actually meets. | ⬜ Open. No reference screenshot exists. Must be done before Phase 5, not after. |
@@ -535,8 +535,8 @@ Phase 7  polish
 
 - [x] `Core` compiles as `net10.0` with zero WPF references (verified by test, not by inspection). **Done in Phase 2.** `CoreAssemblyReferencesNoWpfAssembly` walks the reference graph; a separate guard asserts the assembly's `FrameworkName` has no `Platform=`; a third confines WPF-typed public types to `WpfMath`. All pass.
 - [ ] `MainWindow.xaml.cs` < 200 lines, containing only XAML handlers + input. **Currently 763 lines** — Phase 2 added 5 rather than reducing. Phase 6b.
-- [~] ≥ 40 tests, all passing, covering parser edge cases, filter known-pose, orthonormality invariant, `LineFramer`. **130 tests, 130 passing.** Parser ✅, known-pose ✅, orthonormality ✅, architecture invariants ✅ (not originally listed — added in Phase 2), `LineFramer` ❌ Phase 3.
-- [ ] App runs with `--sim` and `--replay <file>` — no hardware required. Phase 3 (`ISensorStream`) + Phase 6c (composition root).
+- [~] ≥ 40 tests, all passing, covering parser edge cases, filter known-pose, orthonormality invariant, `LineFramer`. **181 tests, 181 passing.** Parser ✅, known-pose ✅, orthonormality ✅, architecture invariants ✅ (not originally listed — added in Phase 2, extended in Phase 3), `LineFramer` ✅ **done in Phase 3 (§10)**.
+- [~] App runs with `--sim` and `--replay <file>` — no hardware required. **The two streams now exist** (`SimulatedSensorStream`, `ReplaySensorStream` — Phase 3), **but nothing in the App can select them**: there is no `--sim`, no `--replay`, and `MainWindow` constructs `SerialSensorStream` directly. The seam is built; the composition root is Phase 6c.
 - [~] Pitch/Roll labels verified against a physical tilt, with a regression test. **Regression test exists** (`OrientationAngleMappingTests`, and it is the test that would have failed had the plan's own wrong description of D1 been implemented). **The physical tilt has not been done** — that half is inherently manual and is still the only way to settle which label is wrong in the user's terms. Phase 6a.
 - [ ] Main view and board view use one axis convention. `WorldFrame` now exists as the single source of truth, but `AddAxes` and `CreateWorldAxes` have not yet been rewired to it. Phase 5d.
 - [ ] Frame rate is a declared UI setting, not a baud-rate side effect. Phase 4.
@@ -555,7 +555,7 @@ Phase 7  polish
 | 0 Hygiene | 0.5 h | 0.5 h | ✅ DONE (`c69881d`) |
 | 1 Tests first | 2–3 h | 3.5 h | ✅ DONE (`f534d57`, gate `8e19f97`) |
 | 2 Core extraction | 3–4 h | 7.5 h | ✅ DONE, **gate fully closed** (`8d933b4`; automated `295d5bf`, visual §9.5) — ⚠ 2d deferred to Phase 3 |
-| 3 Hardware abstraction | 3 h | 10.5 h | ← **NEXT** (starts with `SensorFrame`, §9.7) |
+| 3 Hardware abstraction | 3 h | 10.5 h | ✅ **CODE COMPLETE** (§10) — gate partially closed: build + 181 tests green, hardware parity and log capture still open |
 | 4 Coalescing stage | 2 h | 12.5 h | pending |
 | 5 Rendering extraction | 3 h | 15.5 h | pending |
 | 6 ViewModel + D1 fix | 2 h | 17.5 h | pending |
@@ -779,6 +779,7 @@ Note also that the solution overview reported only 2 projects in **every** run, 
 One caveat about what "fully green" means, so it is not over-read: the visual check was a manual run-and-look, not a pixel comparison against a pre-Phase-2 screenshot. It is sufficient to close Phase 2's gate clause, which asked only that the app "renders identically" — a mirrored or transposed scene would be obvious on sight. It is **not** sufficient for Phase 5's gate, which asks for a pixel comparison, because Phase 5 changes the visual tree in ways that are subtle by design (brush reuse, transform reuse, named layers, `AddAxes` relabelling). Take a screenshot of the current state before starting Phase 5, not after.
 
 ### 9.7 ⚠️ Phase 2 step 2d was NOT done — `SensorFrame` does not exist
+> ✅ **CLOSED IN PHASE 3 — see §10.2.** Everything above was true at the time it was written and is no longer true against the current tree: `SensorFrame.cs` exists, `TryParse(string, out SensorFrame)` exists, the `out int[]` overload is kept as a thin wrapper over a shared private `TryParseValues`, and seven tests pin the new overload. There **is** now something to delete in Phase 5.
 
 Verified against the tree: **there is no `SensorFrame.cs`, no `SensorFrame` type, and no `TryParse` overload returning one.** The only public member of `SensorFrameParser` is still:
 
@@ -792,11 +793,13 @@ So §2d's "add the frame model … keep the old `out int[]` overload as a thin w
 
 **Consequence:** §3b's `event EventHandler<SensorFrame>` currently has no type to bind to. Phase 3 must introduce `SensorFrame` as its first step, not assume it exists.
 
-### 9.8 Possible stray artifact: an empty `EchoEnvironment/Math/` directory — UNCONFIRMED
+### 9.8 ✅ CONFIRMED in Phase 3: an empty `EchoEnvironment/Math/` directory exists — delete it by hand
 
-One directory listing reported `EchoEnvironment\Math\` as existing and **empty** — residue from the first attempt at §2c, before §9.2 deviation 3 established that a namespace called `Math` shadows `System.Math` in every file importing it (and `MainWindow` uses `Math.Abs` throughout). A second, direct probe of the same path reported **not found**.
+One directory listing reported `EchoEnvironment\Math\` as existing and **empty** — residue from the first attempt at §2c, before §9.2 deviation 3 established that a namespace called `Math` shadows `System.Math` in every file importing it (and `MainWindow` uses `Math.Abs` throughout). A second, direct probe of the same path reported **not found**, which is why this stayed open for two phases.
 
-Git does not track empty directories, so it is invisible to `git status` and appears in no diff, and file-listing tools disagree about it. **Treat this as unresolved, not as a known defect.** If it is there, delete it; if it is not, nothing needs doing. `WpfMath.cs` definitely lives at the `EchoEnvironment/` project root with namespace `EchoEnvironment`, which is the part that matters.
+**Now settled.** A raw filesystem listing (not a solution-file listing) confirms `EchoEnvironment\Math\` **exists and is empty**. The reason the disagreement happened: git does not track empty directories, so it is invisible to `git status` and appears in no diff, and any tool that enumerates *solution files* cannot see a directory with no files in it. Only a raw directory listing can.
+
+**Action:** delete it manually (`rmdir EchoEnvironment\Math`). No automated file tool can do it — they operate on files, and there is no file to operate on. It harms nothing except by being misleading about what §2c left behind. `WpfMath.cs` lives at the `EchoEnvironment/` project root with namespace `EchoEnvironment`, which is the part that matters.
 
 ### 9.9 Open obligations carried into Phase 3
 
@@ -823,3 +826,86 @@ A close-and-reopen of `EchoEnvironment.slnx` was performed after Phase 2's gate 
 **What this does not change.** The mitigation in §4 stays: verify by assembly + test count, not by the overview. The overview became accurate only *after* a reload, and a reload is exactly what Phase 3 will need when it adds a fourth project. The durable evidence is still "the assembly was produced and the test count matches expectation."
 
 **Practical consequence for Phase 3:** when the new `EchoEnvironment.Hardware` project appears missing, **reopen the solution first** and re-check by test count. Do not re-run §8's five failed automated attempts — they were diagnosing a problem whose fix was already known. §6's effort note is updated accordingly: the reload is cheap, the *diagnosis* was expensive.
+
+---
+
+## 10. Phase 3 record — code complete, gate **partially** closed ⚠️
+
+**Build:** Debug, whole solution, **0 errors / 0 warnings** across **four** projects. `EchoEnvironment.Hardware\bin\Debug\net10.0-windows\EchoEnvironment.Hardware.dll` was produced and verified on disk (PE headers checked). ⚠️ **Release was NOT verified for Hardware:** `EchoEnvironment.Hardware\bin\Release` and `obj\Release` do not exist, and the available build tool exposes no configuration parameter. §7.5's Release gate was closed for three projects; a **fourth** project now inherits `TreatWarningsAsErrors` and has never been built in Release. Run `dotnet build EchoEnvironment.slnx -c Release` in a terminal before Phase 4.
+**Tests:** **181 total, 181 passed, 0 failed, 0 skipped** (was 130; **+51 new tests**).
+**Gate:** clause 1 (real hardware behaves identically) — **NOT verified, requires a hardware session.** Clause 2 (`ReplaySensorStream` reproduces a captured log frame-for-frame) — **NOT satisfied: the repo still has no capture.** What was substituted is a synthetic log, which proves the class replays a log correctly and proves nothing about the device.
+
+### 10.1 What Phase 3 created
+
+| File | Lines | Covers |
+|---|---|---|
+| `EchoEnvironment.Hardware/LineFramer.cs` | 149 | 3a. Cursor-based framing; `Append` / `TryReadLine` / `TryReadPendingLine` / `TrimOverflow` / `Clear` / `DroppedBytes` / `MaxBuffer` |
+| `EchoEnvironment.Hardware/SerialSensorStream.cs` | 130 | 3b/3c production transport; the moved `SerialPort` + receive + parse path |
+| `EchoEnvironment.Hardware/SimulatedSensorStream.cs` | 216 | 3c simulator: zone sweep + known-pose IMU, `SimulationPose` enum |
+| `EchoEnvironment.Hardware/ReplaySensorStream.cs` | 204 | 3c log replay |
+| `EchoEnvironment.Tests/LineFramerTests.cs` | 389 | 16 tests, incl. line-for-line equivalence against a verbatim copy of the old algorithm |
+| `EchoEnvironment.Tests/SensorStreamTests.cs` | 409 | 26 test cases across the seam and its implementations |
+| `SensorFrameParserTests.cs` +134 | — | 7 tests for the `TryParse(out SensorFrame)` overload |
+| `ArchitectureInvariantTests.cs` +63 | — | 2 new guards (9 total) |
+
+`MainWindow.xaml.cs`: **763 → 755 lines**, `using System.IO.Ports;` **removed**, `_rxBuffer` / `IndexOfNewline` / `Port_DataReceived` **deleted**, replaced by `Stream_FrameReceived` / `Stream_LineRejected` / `Stream_StatusChanged`. `EchoEnvironment.csproj`'s `System.IO.Ports` `PackageReference` **removed**.
+
+### 10.2 §9.7 is now closed — `SensorFrame` exists
+
+`EchoEnvironment.Core/SensorFrame.cs` exists, `TryParse(string, out SensorFrame)` exists, and the original `out int[]` overload was **kept as a thin wrapper** delegating to a shared private `TryParseValues`, exactly as §2d required. So **there is now something to delete in Phase 5**, which §9.7 said there was not. Seven tests pin the new overload against the old one on every shape the parser accepts or rejects, so the App (still on `out int[]`) and the transport (on `SensorFrame`) cannot disagree about whether a line is a frame.
+
+### 10.3 Deviations from the plan's own text
+
+1. **`ISensorStream` has a fourth event, `LineRejected`,** which §3b's sketch omits. Dropping it would have deleted the app's `"Rejected line: …"` status message (`MainWindow.xaml.cs:335`) — a behaviour change smuggled into a structural move. Kept as its own event rather than folded into `StatusChanged` so the two diagnostics cannot be confused.
+2. **`LineFramer` has `TrimOverflow()` as a separate call;** §3a's sketch has no overflow method, implying `Append` drops on overflow. It must not: the old code checked the buffer **after** draining every complete line, so a chunk holding three complete frames plus a wall of garbage delivered those three frames. Dropping inside `Append` would have discarded them. Pinned by `Overflow_DoesNotDiscardCompleteLinesAlreadyDrained`.
+3. **`DroppedBytes` is `long`, not the sketch's `int`.** At 115200 baud a day of garbage passes 2³¹ bytes, and a counter that wraps is worse than none.
+4. **`Close()` does not raise `StatusChanged`.** MainWindow writes `"Disconnected"` unconditionally, including when no port was ever open; having the transport write it too would change the never-connected case. The disconnect message stays the consumer's.
+5. **`LineFramer.MaxBuffer` is a mutable property, not the sketch's `get; set;` on a class with a default** — same thing, but `0` or negative **disables** the guard rather than meaning "drop everything", which is the only reading that makes the guard testable in both directions.
+6. **`SimulatedSensorStream.LineRejected` is written with explicit empty accessors.** `TreatWarningsAsErrors` turns CS0067 ("event is never used") into a build error, and a simulator that claimed it could reject a line would be lying about the contract.
+7. **`ReplaySensorStream` reads in 4096-character chunks** rather than one whole read, so chunk-boundary framing is exercised on replay the way it is on a real port.
+8. **`LineFramer` gained `TryReadPendingLine`,** which §3a's sketch does not have. A log file has an end; a final frame with no trailing newline is still a frame. `SerialSensorStream` deliberately never calls it — a port has no end to drain at.
+
+### 10.4 Behaviour deliberately preserved (this was a move, not a fix)
+
+- **A terminator is a single `'\n'` OR a single `'\r'`,** so `"\r\n"` yields the line **and then an empty line**. Pinned by `CarriageReturnNewline_YieldsTheLine_AndThenAnEmptyLine` and by the CRLF-vs-LF replay equivalence test. Invisible in the app because blank lines are filtered before the parser. "Fixing" it in 3a would have been the exact drift §4's LineFramer row warns about.
+- **Overflow discards everything unread,** exactly as `_rxBuffer.Clear()` did — now observably.
+- **D5 preserved:** `SerialSensorStream.Open` still constructs and subscribes the `SerialPort` before `Open()`, so a failed `Open()` leaks it. Marked in the source.
+- **D7 preserved:** `ReadTimeout = 1000` is still set and still ignored by `ReadExisting()`.
+- **`_rxBuffer` was not cleared between connections** before Phase 3, and `SerialSensorStream` still creates a fresh framer per connection rather than reusing one — the same net effect.
+- **A port that dies mid-read is swallowed.** `Faulted` is raised so a consumer *can* report it, but `MainWindow` does not subscribe: surfacing it would add a status message the app has never shown.
+- **One observable nuance, stated rather than hidden:** `"Connected to COM12"` used to be written directly by `Connect_Click`; it is now raised by `SerialSensorStream.Open` as `StatusChanged` and marshalled through `Dispatcher.BeginInvoke`. Same text, same order relative to the button label, but it now lands on the next dispatcher turn instead of inside the click handler. No test covers this, because no test drives `Connect_Click` (see §10.7).
+
+### 10.5 The equivalence proof, and why a hand-written test would not have been enough
+
+`LineFramerTests.MatchesTheOldMainWindowFramer_LineForLine` replays a deterministic 402-chunk sequence (16- and 64-zone frames, `'\n'` / `"\r\n"` / bare `'\r'` terminators, garbage lines, blank lines produced by CRLF, unterminated tails, and a 12 000-character wall of garbage) through **a verbatim copy of the algorithm MainWindow used before the seam existed** and through `LineFramer`, requiring identical lines in identical order and an identical drop count. The test then asserts `expected.Count > 100` and `expectedDropped > 0`, because a guard that never exercised the overflow path would pass while asserting nothing (§4, High/High).
+
+### 10.6 Two new guards, and what each would have to change to fail
+
+| Guard | Fails if |
+|---|---|
+| `HardwareAssemblyReferencesNothingButCore` | Hardware acquires a reference to the App or (at Phase 5) Rendering; **or** Hardware stops referencing `System.IO.Ports` — i.e. the serial transport creeps back into the App. Also asserts Hardware references no WPF assembly. |
+| `AppAssemblyDoesNotReferenceSystemIoPorts` | The App regains a direct `System.IO.Ports` reference, or loses `EchoEnvironment.Hardware`. |
+
+The second half of the first guard is what makes it falsifiable in both directions; a one-directional "references nothing" check would pass happily after the transport moved back out of Hardware.
+
+### 10.7 Known gaps and one test that was written and then deleted
+
+- **`SerialSensorStream.Open`'s success path is untested.** A first version of `SensorStreamTests` included a test that opened the first available port and asserted the status message. It was **deleted**: on this machine `COM12` is the development sensor, so the test would take the device away from a hardware session, and on a machine with no ports it would return early and pass while asserting nothing. The gap is now stated in the test file rather than papered over.
+- **`MainWindow`'s rewiring is not covered by any test.** No test drives `Connect_Click`, `Disconnect`, or the `Dispatcher.BeginInvoke` marshalling. The App's own behaviour is verified only by running it, which has **not** been done since Phase 3.
+- **`_portProbe`** is a `SerialSensorStream` that is never opened and exists only so `RefreshPorts()` can ask the seam which ports exist. It is a placeholder for Phase 6c's composition root and should be replaced there, not admired.
+- **`frame.Distances.ToArray()` / `frame.Imu.ToArray()`** are copied in `Stream_FrameReceived` because `UpdateFrame` and `UpdateHeatmap` still take `int[]`. Two small allocations per frame — the same the old path paid. Retargeting them to `ReadOnlyMemory<int>` is Phase 5's job.
+- **§9.8's empty `EchoEnvironment/Math/` directory is now CONFIRMED present** (raw filesystem listing; solution-file listings cannot see an empty directory). It is **not yet deleted**: no available tool can remove a directory containing no files. Manual step: `rmdir EchoEnvironment\Math`.
+
+### 10.8 What Phase 4 may now assume
+
+`ISensorStream` exists and is the only place frames enter the app, so Phase 4's coalescing stage has one seam to insert rather than one to build. `SensorFrame.Timestamp` exists for exactly that purpose and is currently consumed by nothing. The `Dispatcher.BeginInvoke` calls in `MainWindow` are the thing Phase 4's bounded channel replaces — and per `ISensorStream`'s threading contract, the obligation to marshal stays with the consumer, not the stream.
+
+### 10.9 Open obligations carried into Phase 4
+
+1. ⚠️ **Run the app and confirm it behaves identically after Phase 3.** Not done. Phase 3 rewired `MainWindow`'s entire input path; a green build and 181 green tests do not reach it (§5, final criterion).
+2. ⚠️ **Capture a real serial log**, then run the `ReplaySensorStream` parity check against it. Phase 3's gate clause 2 is unsatisfied until this exists.
+3. ⚠️ **D5 and D7 are still unfixed** and must be **separate commits** (§3 rule 2). They were deliberately carried through the extraction rather than bundled into it.
+4. ⚠️ **Hardware is in `EchoEnvironment.slnx` and compiles, but `get_solution_overview` still reports 3 projects, not 4.** §9.10's mitigation continues to hold: verify by assembly + test count. The assembly was produced and the count rose 130 → 181, which is the evidence that matters.
+5. **Firmware confirmation of the 25/73 quirk** (§4) — still never done.
+6. **Physical tilt to settle the Pitch/Roll labels** (§5, Phase 6a) — still never done.
+7. **Reference screenshot before Phase 5** (§4) — still none.

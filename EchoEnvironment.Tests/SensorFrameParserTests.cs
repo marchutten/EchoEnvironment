@@ -407,4 +407,138 @@ public class SensorFrameParserTests
         Assert.Empty(distances);
         Assert.Null(imu);
     }
+
+    // -----------------------------------------------------------------------------------------
+    // The SensorFrame overload added in Phase 3 (§9.7, deferred from Phase 2 step 2d).
+    //
+    // These exist because ISensorStream.FrameReceived is the first consumer of the frame model, and
+    // a type nothing tests is a type nothing understands. The overload must agree with the out int[]
+    // overload it was derived from on every shape the parser accepts or rejects - which is what these
+    // assert, pair by pair, rather than re-deriving the rules from the source.
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public void SensorFrameOverload_AcceptsAndRejectsExactlyWhatTheArrayOverloadDoes()
+    {
+        // If the two overloads ever diverge on a shape, the App (still on out int[]) and the
+        // transport (on SensorFrame) would disagree about whether a line is a frame.
+        string[] lines =
+        [
+            LineOfCount(16), LineOfCount(64), LineOfCount(25), LineOfCount(73),
+            "", " ", ",,,", "nonsense", LineOfCount(17), LineOfCount(24) + ",x",
+            "100,101,102,103,104,105,106,107,108,109,110,111,112,113,1 15",
+        ];
+
+        foreach (string line in lines)
+        {
+            bool viaArray = SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu);
+            bool viaFrame = SensorFrameParser.TryParse(line, out SensorFrame frame);
+
+            Assert.Equal(viaArray, viaFrame);
+
+            if (!viaArray)
+            {
+                continue;
+            }
+
+            Assert.Equal(distances, frame.Distances.ToArray());
+            Assert.Equal(imu ?? [], frame.Imu.ToArray());
+            Assert.Equal(distances.Length, frame.ZoneCount);
+            Assert.Equal(imu is not null, frame.HasImu);
+        }
+    }
+
+    [Fact]
+    public void SensorFrameOverload_OnRejection_FrameIsDefault_NotPartiallyPopulated()
+    {
+        Assert.True(SensorFrameParser.TryParse(LineOfCount(25), out SensorFrame good));
+
+        // 25 tokens but the last is garbage: nothing may survive from the previous frame.
+        Assert.False(SensorFrameParser.TryParse(LineOfCount(24) + ",x", out SensorFrame bad));
+        Assert.True(bad.Distances.IsEmpty);
+        Assert.True(bad.Imu.IsEmpty);
+        Assert.False(bad.HasImu);
+        Assert.Equal(0, bad.ZoneCount);
+        Assert.Equal(default, bad.Timestamp);
+    }
+
+    [Fact]
+    public void SensorFrameOverload_ZoneCountIsTheZoneCount_NotTheTokenCount()
+    {
+        // 25 tokens is a 16-zone frame with IMU, not a 25-zone frame. ZoneCount must be 16, and
+        // Distances must hold 16 values, or MainWindow's `distances.Length == 64 ? 8 : 4` grid
+        // selection would pick a size that does not exist.
+        Assert.True(SensorFrameParser.TryParse(LineOfCount(25), out SensorFrame frame));
+        Assert.Equal(16, frame.ZoneCount);
+        Assert.Equal(16, frame.Distances.Length);
+        Assert.Equal(9, frame.Imu.Length);
+        Assert.True(frame.HasImu);
+
+        Assert.True(SensorFrameParser.TryParse(LineOfCount(73), out SensorFrame wide));
+        Assert.Equal(64, wide.ZoneCount);
+        Assert.Equal(64, wide.Distances.Length);
+        Assert.Equal(9, wide.Imu.Length);
+    }
+
+    [Fact]
+    public void SensorFrameOverload_WithoutImu_ImuIsEmptyArray_NotDefaultMemory()
+    {
+        // HasImu false must still leave Imu safe to read. A default(ReadOnlyMemory<int>) and
+        // Array.Empty<int>() both have Length 0, so the distinction matters only for the
+        // IsDefault check below - and the point of the test is that consumers never have to know.
+        Assert.True(SensorFrameParser.TryParse(LineOfCount(16), out SensorFrame frame));
+        Assert.False(frame.HasImu);
+        Assert.Equal(0, frame.Imu.Length);
+        Assert.True(frame.Imu.IsEmpty);
+    }
+
+    [Fact]
+    public void SensorFrameOverload_DistancesAndImuRemainSeparateArrays()
+    {
+        // The same ownership guarantee the array overload pins, restated for the frame model: the
+        // two are NOT views over one buffer, so writing through Distances cannot corrupt Imu.
+        Assert.True(SensorFrameParser.TryParse(LineOfCount(25), out SensorFrame frame));
+
+        int[] distances = frame.Distances.ToArray();
+        int[] imu = frame.Imu.ToArray();
+        distances[0] = 999;
+        Assert.NotEqual(999, imu[0]);
+
+        imu[0] = 888;
+        Assert.NotEqual(888, frame.Distances.Span[0]);
+    }
+
+    [Fact]
+    public void SensorFrameOverload_TimestampIsStamped_AndCanBeReplacedByWith()
+    {
+        DateTimeOffset before = DateTimeOffset.UtcNow;
+        Assert.True(SensorFrameParser.TryParse(LineOfCount(16), out SensorFrame frame));
+        DateTimeOffset after = DateTimeOffset.UtcNow;
+
+        Assert.True(frame.Timestamp >= before && frame.Timestamp <= after,
+            $"parse timestamp {frame.Timestamp:O} is outside [{before:O}, {after:O}].");
+
+        // A replay source replaces the timestamp rather than re-parsing. This is the mechanism
+        // Phase 4's coalescing stage and Phase 6's replay rely on.
+        var replayed = frame with { Timestamp = new DateTimeOffset(2026, 11, 19, 0, 0, 0, TimeSpan.Zero) };
+        Assert.Equal(new DateTimeOffset(2026, 11, 19, 0, 0, 0, TimeSpan.Zero), replayed.Timestamp);
+        Assert.Equal(frame.Distances.Length, replayed.Distances.Length);
+    }
+
+    [Fact]
+    public void SensorFrameEquality_ComparesArrayReferences_NotContents()
+    {
+        // DOCUMENTS A TRAP, not an approved behaviour. This is a record struct, so the compiler
+        // generated value equality - but ReadOnlyMemory<T>.Equals compares the backing array
+        // reference and span bounds, not the values. Two frames holding identical numbers backed by
+        // different arrays are NOT equal. Nothing in the codebase compares frames today; if a future
+        // consumer needs content equality, it must add an explicit Equals override rather than
+        // assuming the generated one does it. If this test ever starts PASSING, something changed the
+        // frame's backing storage and this comment is now wrong.
+        Assert.True(SensorFrameParser.TryParse(LineOfCount(16), out SensorFrame a));
+        Assert.True(SensorFrameParser.TryParse(LineOfCount(16), out SensorFrame b));
+
+        Assert.Equal(a.Distances.ToArray(), b.Distances.ToArray());
+        Assert.NotEqual(a, b);
+    }
 }

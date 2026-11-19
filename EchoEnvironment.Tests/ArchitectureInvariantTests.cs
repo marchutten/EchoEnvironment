@@ -186,4 +186,67 @@ public class ArchitectureInvariantTests
 
     private static bool IsWpfAssembly(Type type) =>
         WpfAssemblies.Contains(type.Assembly.GetName().Name);
+
+    // ------------------------------------------------------------------
+    // Phase 3 guards. Same shape as the Phase 2 guards: read the compiled
+    // assembly's own ReferencedAssemblies, so the rule is enforced by the build
+    // output rather than by a comment in a csproj.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Hardware may depend on Core and nothing else from this solution. Written as "no reference to
+    /// any other EchoEnvironment assembly" rather than "references exactly Core", because the failure
+    /// this exists to catch is Hardware quietly acquiring the App or (at Phase 5) Rendering — the
+    /// edge the plan's dependency graph forbids and that nothing in the graph itself prevents.
+    ///
+    /// It also asserts the positive half, which is what makes the guard falsifiable in both
+    /// directions: Hardware must reference System.IO.Ports, because it is the layer that owns the
+    /// serial transport. If the transport ever creeps back into the App, this fails.
+    /// </summary>
+    [Fact]
+    public void HardwareAssemblyReferencesNothingButCore()
+    {
+        Assembly hardware = typeof(EchoEnvironment.Hardware.ISensorStream).Assembly;
+
+        string[] referenced = hardware
+            .GetReferencedAssemblies()
+            .Select(name => name.Name ?? string.Empty)
+            .ToArray();
+
+        Assert.Contains("EchoEnvironment.Core", referenced);
+
+        Assert.All(referenced, name =>
+        {
+            if (name.StartsWith("EchoEnvironment", StringComparison.Ordinal))
+            {
+                Assert.NotEqual("EchoEnvironment", name);
+                Assert.NotEqual("EchoEnvironment.Tests", name);
+                Assert.NotEqual("EchoEnvironment.Rendering", name);
+            }
+        });
+
+        Assert.Contains("System.IO.Ports", referenced);
+
+        // Hardware must stay testable without a UI: no WPF, and no UseWPF in its TFM.
+        Assert.All(WpfAssemblies, assembly => Assert.DoesNotContain(assembly, referenced));
+    }
+
+    /// <summary>
+    /// The App must no longer be able to name a serial type. This is the whole point of Phase 3, and
+    /// it is the guard that makes the claim in EchoEnvironment.csproj ("the App no longer talks to
+    /// SerialPort") a fact rather than a comment.
+    /// </summary>
+    [Fact]
+    public void AppAssemblyDoesNotReferenceSystemIoPorts()
+    {
+        string[] referenced = typeof(MainWindow).Assembly
+            .GetReferencedAssemblies()
+            .Select(name => name.Name ?? string.Empty)
+            .ToArray();
+
+        Assert.DoesNotContain("System.IO.Ports", referenced);
+
+        // And the seam it replaced must actually be there.
+        Assert.Contains("EchoEnvironment.Hardware", referenced);
+    }
 }

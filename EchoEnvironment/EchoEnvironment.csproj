@@ -7,15 +7,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.IO.Ports" Version="11.0.0" />
-  </ItemGroup>
-
-  <ItemGroup>
     <!--
-      Phase 2: the domain logic now lives in EchoEnvironment.Core (plain net10.0, no WPF).
-      The App is allowed to see WPF; Core is not. WpfMath.cs is the only conversion point.
+      Phase 3: the System.IO.Ports PackageReference was REMOVED from this project. The App no longer
+      talks to SerialPort at all - it consumes ISensorStream. The package still reaches the App
+      transitively through EchoEnvironment.Hardware, which is now the only project besides Hardware
+      allowed to name a serial type.
     -->
     <ProjectReference Include="..\EchoEnvironment.Core\EchoEnvironment.Core.csproj" />
+    <ProjectReference Include="..\EchoEnvironment.Hardware\EchoEnvironment.Hardware.csproj" />
   </ItemGroup>
 
 </Project>

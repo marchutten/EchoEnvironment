@@ -4,5 +4,6 @@
     <File Path="MIGRATION_PLAN.md" />
   </Folder>
   <Project Path="EchoEnvironment.Core/EchoEnvironment.Core.csproj" />
+  <Project Path="EchoEnvironment.Hardware/EchoEnvironment.Hardware.csproj" />
   <Project Path="EchoEnvironment.Tests/EchoEnvironment.Tests.csproj" />
 </Solution>

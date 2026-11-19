@@ -1,10 +1,10 @@
 using System.IO;
-using System.IO.Ports;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using EchoEnvironment.Core;
+using EchoEnvironment.Hardware;
 
 namespace EchoEnvironment
 {
@@ -27,9 +27,16 @@ namespace EchoEnvironment
         private readonly List<GeometryModel3D> _zoneModels = [];
         private readonly MeshGeometry3D _cubeMesh = CreateCubeMesh(0.02);
         private readonly GeometryModel3D _lineModel = CreateLineModel();
-        private readonly System.Text.StringBuilder _rxBuffer = new();
         private const string DefaultPort = "COM12";
-        private SerialPort? _port;
+        private ISensorStream? _stream;
+
+        /// <summary>
+        /// Never opened. Exists only so RefreshPorts asks the transport seam which ports exist,
+        /// instead of calling SerialPort directly — which is what lets the App drop its
+        /// System.IO.Ports reference entirely.
+        /// </summary>
+        private readonly SerialSensorStream _portProbe = new();
+
         private int _frames;
         private const int MapBuckets = 16;
         private readonly Dictionary<int, (Point3D Position, int Bucket)> _map = [];
@@ -37,19 +44,6 @@ namespace EchoEnvironment
         private readonly GeometryModel3D[] _mapModels = new GeometryModel3D[MapBuckets];
         private long _lastMapRender;
         private readonly GeometryModel3D _gridModel = CreateGridModel(3.98, 0.5);
-
-        private static int IndexOfNewline(System.Text.StringBuilder sb)
-        {
-            for (int i = 0; i < sb.Length; i++)
-            {
-                if (sb[i] is '\n' or '\r')
-                {
-                    return i;
-                }
-            }
-
-            return -1;
-        }
 
         public MainWindow()
         {
@@ -244,7 +238,9 @@ namespace EchoEnvironment
         private void RefreshPorts()
         {
             string selected = PortComboBox.Text;
-            PortComboBox.ItemsSource = SerialPort.GetPortNames().Order().ToList();
+            // Phase 3: the port list comes from the transport seam, not from SerialPort directly.
+            // The App no longer references System.IO.Ports at all.
+            PortComboBox.ItemsSource = _portProbe.ListPorts().Select(p => p.Name).Order().ToList();
             PortComboBox.Text = string.IsNullOrWhiteSpace(selected)
                 ? (PortComboBox.Items.Contains(DefaultPort) ? DefaultPort : PortComboBox.Items.Count > 0 ? PortComboBox.Items[0]?.ToString() : DefaultPort)
                 : selected;
@@ -252,7 +248,7 @@ namespace EchoEnvironment
 
         private void Connect_Click(object sender, RoutedEventArgs e)
         {
-            if (_port is not null)
+            if (_stream is not null)
             {
                 Disconnect();
                 return;
@@ -264,87 +260,83 @@ namespace EchoEnvironment
                 return;
             }
 
+            var stream = new SerialSensorStream();
             try
             {
-                var port = new SerialPort(PortComboBox.Text, baud) { NewLine = "\n", ReadTimeout = 1000 };
-                port.DataReceived += Port_DataReceived;
-                port.Open();
-                _port = port;
+                stream.FrameReceived += Stream_FrameReceived;
+                stream.LineRejected += Stream_LineRejected;
+                stream.StatusChanged += Stream_StatusChanged;
+                stream.Open(PortComboBox.Text, baud);
+
+                _stream = stream;
                 _imuFilter.Reset();
                 _lastImuTimestamp = 0;
                 ConnectButton.Content = "Disconnect";
-                StatusText.Text = $"Connected to {port.PortName}";
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
             {
+                // The stream was never handed to Disconnect(), so it is released right here.
+                // Whether a failed Open() leaks the port is defect D5, inside SerialSensorStream:
+                // it is preserved unchanged by this extraction and fixed in 3d's own commit.
+                stream.Dispose();
                 StatusText.Text = ex.Message;
             }
         }
 
         private void Disconnect()
         {
-            SerialPort? port = _port;
-            _port = null;
-            if (port is not null)
+            ISensorStream? stream = _stream;
+            _stream = null;
+            if (stream is not null)
             {
-                port.DataReceived -= Port_DataReceived;
-                port.Dispose();
+                stream.FrameReceived -= Stream_FrameReceived;
+                stream.LineRejected -= Stream_LineRejected;
+                stream.StatusChanged -= Stream_StatusChanged;
+                stream.Dispose();
             }
 
             ConnectButton.Content = "Connect";
             StatusText.Text = "Disconnected";
         }
 
-        private void Port_DataReceived(object sender, SerialDataReceivedEventArgs e)
+        // Phase 3: the transport's own thread raises these (see ISensorStream's threading contract),
+        // so every one of them marshals through Dispatcher exactly as Port_DataReceived did before
+        // the seam existed. The obligation to marshal stayed with the consumer, not the stream.
+        private void Stream_StatusChanged(object? sender, string status)
         {
-            if (sender is not SerialPort port)
-            {
-                return;
-            }
+            Dispatcher.BeginInvoke(() => StatusText.Text = status);
+        }
 
-            try
+        private void Stream_LineRejected(object? sender, string line)
+        {
+            string rejected = line.Length > 80 ? line[..80] : line;
+            Dispatcher.BeginInvoke(() => StatusText.Text = $"Rejected line: {rejected}");
+        }
+
+        private void Stream_FrameReceived(object? sender, SensorFrame frame)
+        {
+            Dispatcher.BeginInvoke(() =>
             {
-                _rxBuffer.Append(port.ReadExisting());
-                int newline;
-                while ((newline = IndexOfNewline(_rxBuffer)) >= 0)
+                _frames++;
+                if (frame.HasImu)
                 {
-                    string line = _rxBuffer.ToString(0, newline);
-                    _rxBuffer.Remove(0, newline + 1);
-                    if (SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu))
-                    {
-                        Dispatcher.BeginInvoke(() =>
-                        {
-                            _frames++;
-                            if (imu is not null)
-                            {
-                                long now = System.Diagnostics.Stopwatch.GetTimestamp();
-                                double dt = _lastImuTimestamp == 0 ? 0 : System.Diagnostics.Stopwatch.GetElapsedTime(_lastImuTimestamp, now).TotalSeconds;
-                                _lastImuTimestamp = now;
-                                SetOrientation(_imuFilter.Update(imu, dt));
-                            }
-                            UpdateFrame(distances);
-                            string imuText = imu is null
-                                ? string.Empty
-                                : $" | gyro {imu[0]},{imu[1]},{imu[2]} accel {imu[3]},{imu[4]},{imu[5]} mag {imu[6]},{imu[7]},{imu[8]}";
-                            StatusText.Text = $"Frames: {_frames} ({distances.Length} zones, {distances.Count(d => d >= MinDistanceMm && d <= MaxDistanceMm)} visible, max {distances.Max()} mm){imuText}";
-                        });
-                    }
-                    else if (!string.IsNullOrWhiteSpace(line))
-                    {
-                        string rejected = line.Length > 80 ? line[..80] : line;
-                        Dispatcher.BeginInvoke(() => StatusText.Text = $"Rejected line: {rejected}");
-                    }
+                    long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                    double dt = _lastImuTimestamp == 0 ? 0 : System.Diagnostics.Stopwatch.GetElapsedTime(_lastImuTimestamp, now).TotalSeconds;
+                    _lastImuTimestamp = now;
+                    SetOrientation(_imuFilter.Update(frame.Imu.ToArray(), dt));
                 }
 
-                if (_rxBuffer.Length > 10000)
-                {
-                    _rxBuffer.Clear();
-                }
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException)
-            {
-                // Port closed while reading.
-            }
+                // The two ToArray() copies exist because UpdateFrame and UpdateHeatmap still take
+                // int[]. Retargeting them to ReadOnlyMemory is Phase 5's job; until then the hot
+                // path pays two small allocations per frame, which is what it paid before too.
+                int[] distances = frame.Distances.ToArray();
+                UpdateFrame(distances);
+                ReadOnlySpan<int> imu = frame.Imu.Span;
+                string imuText = frame.HasImu
+                    ? $" | gyro {imu[0]},{imu[1]},{imu[2]} accel {imu[3]},{imu[4]},{imu[5]} mag {imu[6]},{imu[7]},{imu[8]}"
+                    : string.Empty;
+                StatusText.Text = $"Frames: {_frames} ({distances.Length} zones, {distances.Count(d => d >= MinDistanceMm && d <= MaxDistanceMm)} visible, max {distances.Max()} mm){imuText}";
+            });
         }
 
         private void UpdateHeatmap(int[] distances, int size)
@@ -643,39 +635,39 @@ namespace EchoEnvironment
             return group;
         }
 
-		// Horizontal raster at z = 0 (WPF Y = 0), fixed in the world so it stays visible at any zoom.
-		private static GeometryModel3D CreateGridModel(double extent, double spacing)
-		{
-			const double half = 0.003;
-			var mesh = new MeshGeometry3D();
-			int lines = (int)Math.Round(extent / spacing);
+        // Horizontal raster at z = 0 (WPF Y = 0), fixed in the world so it stays visible at any zoom.
+        private static GeometryModel3D CreateGridModel(double extent, double spacing)
+        {
+            const double half = 0.003;
+            var mesh = new MeshGeometry3D();
+            int lines = (int)Math.Round(extent / spacing);
 
-			void AddFlatQuad(double x0, double z0, double x1, double z1)
-			{
-				int i = mesh.Positions.Count;
-				mesh.Positions.Add(new Point3D(x0, 0, z0));
-				mesh.Positions.Add(new Point3D(x1, 0, z0));
-				mesh.Positions.Add(new Point3D(x1, 0, z1));
-				mesh.Positions.Add(new Point3D(x0, 0, z1));
-				foreach (int t in new[] { 0, 1, 2, 0, 2, 3 })
-				{
-					mesh.TriangleIndices.Add(i + t);
-				}
-			}
+            void AddFlatQuad(double x0, double z0, double x1, double z1)
+            {
+                int i = mesh.Positions.Count;
+                mesh.Positions.Add(new Point3D(x0, 0, z0));
+                mesh.Positions.Add(new Point3D(x1, 0, z0));
+                mesh.Positions.Add(new Point3D(x1, 0, z1));
+                mesh.Positions.Add(new Point3D(x0, 0, z1));
+                foreach (int t in new[] { 0, 1, 2, 0, 2, 3 })
+                {
+                    mesh.TriangleIndices.Add(i + t);
+                }
+            }
 
-			for (int n = -lines; n <= lines; n++)
-			{
-				double c = n * spacing;
-				double w = Math.Sqrt(extent * extent - c * c);
-				AddFlatQuad(c - half, -w, c + half, w);
-				AddFlatQuad(-w, c - half, w, c + half);
-			}
+            for (int n = -lines; n <= lines; n++)
+            {
+                double c = n * spacing;
+                double w = Math.Sqrt(extent * extent - c * c);
+                AddFlatQuad(c - half, -w, c + half, w);
+                AddFlatQuad(-w, c - half, w, c + half);
+            }
 
-			var material = new EmissiveMaterial(new SolidColorBrush(Color.FromRgb(90, 110, 130)));
-			var model = new GeometryModel3D(mesh, material) { BackMaterial = material };
-			model.Freeze();
-			return model;
-		}
+            var material = new EmissiveMaterial(new SolidColorBrush(Color.FromRgb(90, 110, 130)));
+            var model = new GeometryModel3D(mesh, material) { BackMaterial = material };
+            model.Freeze();
+            return model;
+        }
         private static GeometryModel3D CreateLineModel()
         {
             var material = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(200, 200, 200)));

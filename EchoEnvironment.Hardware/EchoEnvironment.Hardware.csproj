@@ -1,0 +1,30 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      TargetFramework is stated EXPLICITLY here (MIGRATION_PLAN 1, gotcha 4). It is no longer
+      inherited from Directory.Build.props, so a project that omits it fails to build instead of
+      silently picking up the wrong TFM. net10.0-windows is deliberate: this layer owns the serial
+      transport. No UseWPF - Hardware must stay testable without a UI, and the dependency graph
+      forbids it from ever referencing Rendering or the App.
+    -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>EchoEnvironment.Hardware</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Phase 3: this is where System.IO.Ports now lives. The App's own reference to it was removed in
+      the same commit that moved the SerialPort code here, so Hardware is the only project that can
+      name a serial type.
+    -->
+    <PackageReference Include="System.IO.Ports" Version="11.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core only. Never Rendering, never the App (MIGRATION_PLAN 1, dependency graph).
+         Enforced by HardwareAssemblyReferencesNothingButCore. -->
+    <ProjectReference Include="..\EchoEnvironment.Core\EchoEnvironment.Core.csproj" />
+  </ItemGroup>
+
+</Project>
