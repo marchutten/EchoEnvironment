@@ -10,6 +10,10 @@
             <TextBlock Text="Baud:" VerticalAlignment="Center" Margin="8,0,4,0"/>
             <TextBox x:Name="BaudTextBox" Text="115200" Width="70" VerticalContentAlignment="Center"/>
             <Button x:Name="ConnectButton" Content="Connect" Margin="8,0" Padding="12,0" Click="Connect_Click"/>
+            <!-- Phase 5: opt-in raw capture of everything the port receives, for the replay parity
+                 check the plan has carried since Phase 3. Off by default: nothing is written unless
+                 the user asks for it. -->
+            <CheckBox x:Name="CaptureCheckBox" Content="Capture log" VerticalAlignment="Center" Margin="8,0" Click="Capture_Click"/>
             <CheckBox x:Name="ShowGridCheckBox" Content="Show grid" VerticalAlignment="Center" Margin="0,0,8,0" Click="ShowGrid_Click"/>
             <CheckBox x:Name="KeepMapCheckBox" Content="Keep map" VerticalAlignment="Center" Margin="0,0,8,0" Click="KeepMap_Click"/>
             <!-- Phase 4: frame rate is a declared UI setting, not a side effect of the baud rate.

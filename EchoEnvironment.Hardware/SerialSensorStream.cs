@@ -21,10 +21,18 @@ namespace EchoEnvironment.Hardware;
 ///   - D7: <c>ReadTimeout = 1000</c> is set and never honored, because <c>ReadExisting()</c> ignores
 ///     it.
 /// Fixing either here would make a hardware regression unattributable to one of the three changes.
+///
+/// PHASE 5 ADDITION (the raw capture): <see cref="StartCapture"/> tees the text this transport
+/// receives to a file. Until this commit the solution contained no writer of any kind, so the
+/// "capture a real serial log" obligation MIGRATION_PLAN 3c and 4 have carried since Phase 3 was not
+/// merely undone - it was impossible even during a live hardware session. The capture is deliberately
+/// NOT on <see cref="ISensorStream"/>: it is a property of the serial transport, not of the seam, and
+/// a replay source has nothing to capture.
 /// </summary>
 public sealed class SerialSensorStream : ISensorStream
 {
     private readonly LineFramer _framer = new();
+    private RawTextCapture? _capture;
     private SerialPort? _port;
     private bool _disposed;
 
@@ -40,6 +48,65 @@ public sealed class SerialSensorStream : ISensorStream
 
     /// <summary>The framer's overflow counter, exposed for diagnostics and for tests.</summary>
     public long DroppedBytes => _framer.DroppedBytes;
+
+    // ---------------------------------------------------------------------------------------------
+    // The raw capture. Opt-in: with no capture started, nothing above or below behaves differently,
+    // and the transport still has no opinion about where a log should be kept.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>The file being captured, or null when no capture is active.</summary>
+    public string? CaptureFilePath => _capture?.FilePath;
+
+    /// <summary>Raw characters written so far. A count of text, not of frames.</summary>
+    public long CaptureCharacters => _capture?.CharactersWritten ?? 0;
+
+    /// <summary>The exception that ended the capture, or null while it is healthy.</summary>
+    public Exception? CaptureFailure => _capture?.Failure;
+
+    /// <summary>
+    /// Builds a default capture path: a timestamped file named for the port and the baud rate, under a
+    /// captures folder next to the executable. The name carries the conditions of the capture because a
+    /// log whose baud rate is unknown cannot be compared against a run at a different one.
+    /// </summary>
+    public static string DefaultCapturePath(string portName, int baudRate)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(portName);
+        string safe = string.Concat(portName.Select(c => char.IsLetterOrDigit(c) ? c : '-'));
+        return Path.Combine(AppContext.BaseDirectory, "captures", $"{safe}-{baudRate}-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
+    }
+
+    /// <summary>
+    /// Starts capturing raw received text. An unusable path throws here, at the caller's request,
+    /// rather than failing later inside the receive handler: a capture that cannot be started must not
+    /// be able to prevent a connection. Starting a second capture closes the first, so switching
+    /// targets cannot leave a file open by accident.
+    /// </summary>
+    public void StartCapture(string filePath)
+    {
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(SerialSensorStream));
+        }
+
+        // Constructed before the previous capture is released: if this path is unusable the exception
+        // propagates and the capture that was working keeps working.
+        var capture = new RawTextCapture(filePath);
+        RawTextCapture? previous = _capture;
+        _capture = capture;
+        previous?.Dispose();
+    }
+
+    /// <summary>
+    /// Ends the capture and closes the file. Safe when no capture is active and safe to call twice:
+    /// <see cref="Close"/> calls it, and a consumer may call it first to report a character count
+    /// before the connection ends.
+    /// </summary>
+    public void StopCapture()
+    {
+        RawTextCapture? capture = _capture;
+        _capture = null;
+        capture?.Dispose();
+    }
 
     public IReadOnlyList<PortDescriptor> ListPorts() =>
         SerialPort.GetPortNames().Select(name => new PortDescriptor(name)).ToList();
@@ -84,6 +151,11 @@ public sealed class SerialSensorStream : ISensorStream
             port.DataReceived -= Port_DataReceived;
             port.Dispose();
         }
+
+        // The capture closes with the connection it belongs to, so no file handle can outlive the
+        // session that opened it. StopCapture never throws, so a file that will not close cannot
+        // disturb a port that is already closing.
+        StopCapture();
     }
 
     public void Dispose()
@@ -101,7 +173,12 @@ public sealed class SerialSensorStream : ISensorStream
 
         try
         {
-            _framer.Append(port.ReadExisting());
+            // The tee sits BEFORE the framer and the parser, which is the whole point: a capture taken
+            // after parsing would record SensorFrameParser's own output, and replaying it would compare
+            // the parser against itself. See RawTextCapture.
+            string received = port.ReadExisting();
+            _capture?.Write(received);
+            _framer.Append(received);
 
             while (_framer.TryReadLine(out string line))
             {

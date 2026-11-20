@@ -29,6 +29,7 @@ namespace EchoEnvironment
         private long _lastImuTimestamp;
         private const string DefaultPort = "COM12";
         private ISensorStream? _stream;
+        private string? _capturePath;
 
         /// <summary>
         /// Never opened. Exists only so RefreshPorts asks the transport seam which ports exist,
@@ -238,6 +239,15 @@ namespace EchoEnvironment
                 stream.FrameReceived += Stream_FrameReceived;
                 stream.LineRejected += Stream_LineRejected;
                 stream.StatusChanged += Stream_StatusChanged;
+
+                // Armed BEFORE Open(): DataReceived can fire as soon as the port is open, so a capture
+                // attached afterwards would miss the first burst — and the first burst is exactly where
+                // a framing difference between device and replay would show up.
+                if (CaptureCheckBox.IsChecked == true)
+                {
+                    StartCaptureFor(stream);
+                }
+
                 stream.Open(PortComboBox.Text, baud);
 
                 _stream = stream;
@@ -246,6 +256,17 @@ namespace EchoEnvironment
                 _coalescer.Clear();
                 _renderTimer.Start();
                 ConnectButton.Content = "Disconnect";
+
+                // Open raised "Connected to COM12" through Dispatcher.BeginInvoke, which lands after
+                // anything this method sets synchronously - so the capture path has to be queued behind
+                // it or it is overwritten before anyone can read it. The path has to be readable for the
+                // whole session: Disconnect's report goes to a window that is already on its way out when
+                // the app is closed rather than disconnected, and a capture whose location nobody knows
+                // is a capture that gets thrown away.
+                if (_capturePath is not null)
+                {
+                    Dispatcher.BeginInvoke(() => StatusText.Text = $"Connected - capturing to {_capturePath}");
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
             {
@@ -261,8 +282,14 @@ namespace EchoEnvironment
         {
             ISensorStream? stream = _stream;
             _stream = null;
+            long captured = 0;
             if (stream is not null)
             {
+                // The count is read before Dispose, because Dispose is what closes the file and the
+                // count is the only record of how much arrived. AutoFlush on the capture means the
+                // count and the file agree.
+                captured = stream is SerialSensorStream serial ? serial.CaptureCharacters : 0;
+
                 stream.FrameReceived -= Stream_FrameReceived;
                 stream.LineRejected -= Stream_LineRejected;
                 stream.StatusChanged -= Stream_StatusChanged;
@@ -275,8 +302,15 @@ namespace EchoEnvironment
             _renderTimer.Stop();
             _coalescer.Clear();
 
+            // The capture closes inside Dispose. Only a session that actually captured gets a
+            // different status message, so the never-capturing path still reads exactly "Disconnected".
+            string? capturePath = _capturePath;
+            _capturePath = null;
+
             ConnectButton.Content = "Connect";
-            StatusText.Text = "Disconnected";
+            StatusText.Text = capturePath is null
+                ? "Disconnected"
+                : $"Disconnected - captured {captured} characters to {capturePath}";
         }
 
         // Phase 3: the transport's own thread raises these (see ISensorStream's threading contract),
@@ -382,6 +416,64 @@ namespace EchoEnvironment
             }
 
             _zones.ClearMap();
+        }
+
+        // ---------------------------------------------------------------------------------------
+        // The raw capture (Phase 5). Opt-in, decided per connection, and never able to break the
+        // connection it observes.
+        // ---------------------------------------------------------------------------------------
+
+        private void Capture_Click(object sender, RoutedEventArgs e) => ApplyCapture();
+
+        /// <summary>
+        /// Applies the Capture checkbox to whatever connection is live: checking it starts a capture,
+        /// unchecking it closes the file. With no connection the choice is simply remembered and
+        /// applied by Connect_Click, so arming capture before plugging the device in is the normal way
+        /// to use this.
+        /// </summary>
+        private void ApplyCapture()
+        {
+            if (_stream is not SerialSensorStream serial)
+            {
+                StatusText.Text = CaptureCheckBox.IsChecked == true
+                    ? "Capture armed: starts on Connect"
+                    : "Capture off";
+                return;
+            }
+
+            if (CaptureCheckBox.IsChecked == true)
+            {
+                StartCaptureFor(serial);
+                return;
+            }
+
+            serial.StopCapture();
+            _capturePath = null;
+            StatusText.Text = "Capture stopped";
+        }
+
+        /// <summary>
+        /// Starts a capture on a live stream. A capture that cannot be started is reported and the
+        /// connection continues unchanged — deliberately swallowed here rather than allowed to reach
+        /// Connect_Click's catch block, which would dispose the stream and end a session over a
+        /// storage problem.
+        /// </summary>
+        private void StartCaptureFor(SerialSensorStream stream)
+        {
+            int.TryParse(BaudTextBox.Text, out int baud);
+            string path = SerialSensorStream.DefaultCapturePath(PortComboBox.Text, baud);
+
+            try
+            {
+                stream.StartCapture(path);
+                _capturePath = path;
+                StatusText.Text = $"Capturing to {path}";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                _capturePath = null;
+                StatusText.Text = $"Capture failed: {ex.Message}";
+            }
         }
 
 

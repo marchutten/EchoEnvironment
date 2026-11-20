@@ -1,8 +1,8 @@
 ﻿# EchoEnvironment — Migration Plan
 
-**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** the Phase 4 commit `f6a75a5`, **16 commits ahead** of `origin/main`, **working tree clean** — Phase 4 is committed. Solution builds 0 errors / 0 warnings across **four** projects **in Debug**. ⚠️ **Release has not been verified since Phase 2** (§7.5 closed it for three projects; §10 and §11 both carry it open for the fourth and for Phase 4's changes).
-**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · **4 ✅ code complete, gate PARTIALLY closed (§11)** · 5–7 pending.
-**Test suite:** **193 tests, 193 passed, 0 failed, 0 skipped** (130 before Phase 3, 181 before Phase 4).
+**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** the serial-capture commit (§12.11), **22 commits ahead** of `origin/main`, **working tree clean** — Phase 5 commits 1 and 2 are committed, commit 3 is not started. Solution builds 0 errors / 0 warnings across **five** projects **in Debug**. ⚠️ **Release has still never been verified** (§7.5 closed it for three projects; §10, §11 and §12.11 all carry it open — the tooling available here cannot select a build configuration, so `dotnet build EchoEnvironment.slnx -c Release` must be run by hand).
+**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · 4 ✅ code complete, gate PARTIALLY closed (§11) · **5 ⏳ commits 1 and 2 done (`bce4b00`, `321c7bc`), commit 3 not started; the §12.1 visual gate is still open in letter (§12.10)** · 6–7 pending.
+**Test suite:** **248 tests, 248 passed, 0 failed, 0 skipped** (130 before Phase 3, 181 before Phase 4, 222 before the capture commit).
 **Goal:** split the 755-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
 
 **Governing rule:** *seam first, then move.* Every phase must leave the app runnable and the build green. No phase may mix a behavior change with a structural move.
@@ -1358,6 +1358,117 @@ commit 2's rewiring (checkbox→renderer→map) is demonstrated working on live 
 suite covers. **Save this capture as `docs/baseline/pre-phase5-connected.png`**: it is the only connected-state
 reference that exists, and Phase 5c/5d are about to change brushes, layers and axis labels — i.e. exactly
 what this image shows.
+
+---
+
+## 12.11 The serial capture commit — and why it had to come before 5c
+
+Taken from §12.10's Finding 8: a live device was connected, and the solution contained **no writer of any
+kind**, so "capture a real serial log" was not an undone task but an impossible one. Inserted before 5c
+because the hardware was already connected and 5c changes no rendering that this touches.
+
+### The placement of the tee is the whole design
+
+`RawTextCapture` is called from `SerialSensorStream.Port_DataReceived`, **before** `_framer.Append`:
+
+```csharp
+string received = port.ReadExisting();
+_capture?.Write(received);
+_framer.Append(received);
+```
+
+Why it cannot sit anywhere else. `ISensorStream`'s contract is **frames, not bytes** — by the time the seam
+hands anything out, `SensorFrameParser` has already run. A capture taken from the seam would record the
+parser's own output, and replaying it would compare the parser against itself: a parity check that cannot
+fail, and therefore proves nothing. `LineRejected` is not a substitute either — it carries only the lines
+that *failed* to parse, which is precisely the minority of a stream.
+
+So the raw text exists in exactly one place, inside the transport, and the tee had to go there. It is
+deliberately **not** on `ISensorStream`: it is a property of the serial transport, and a replay source has
+nothing to capture.
+
+### "Raw" means raw-after-decode, and that distinction is recorded in the artifact
+
+`ReadExisting()` returns a string produced by the port's decoder. `RawTextCapture` writes with
+`Encoding.ASCII`, which is `SerialPort`'s default decoder, so the capture is byte-faithful **to what the
+app saw** — not to the wire. A device emitting a byte outside ASCII appears here as the decoder's
+substitution. Stated explicitly because an artifact that claims to be the wire and is actually the decode is
+the kind that misleads a later investigation.
+
+Terminators are preserved verbatim: nothing calls `WriteLine`, `NewLine` is never set. `LineFramer` treats
+`'\r'` and `'\n'` as two terminators, so a CRLF capture replays as a line plus an empty line — which is what
+the serial path has always produced. A capture that normalised terminators to disk would replay a stream the
+port never produced.
+
+### Finding 10 — a capture and a replay legitimately disagree on the final frame
+
+`CapturedText_TrailingFrameWithoutNewline_ExistsOnReplayButNeverReachedTheLiveApp` pins it. `LineFramer`
+documents that a serial port has no end, so `SerialSensorStream` never drains the unterminated remainder;
+`ReplaySensorStream` does, because a log file has an end. So a session interrupted mid-frame yields **one
+frame on replay that the app never drew**.
+
+This was found while writing the parity test, and it changed the test: that shape was originally in the
+`CapturedText_ReplaysToTheSameFramesTheLiveFramerProduced` theory, where asserting equality would have been a
+false parity claim. It is now excluded from the theory and asserted as a divergence instead. Not a bug to fix
+in a capture commit — a property of the parity check itself, and one that must be accounted for whenever a
+capture is compared against a replay.
+
+### Finding 11 — `LineFramer` is not thread-safe, and the capture made that consequential
+
+`SerialPort.DataReceived` is not documented to be serialised: two handlers can run concurrently. `RawTextCapture`
+locks its own file, but the pre-existing `_framer` has no such protection, and it has been exposed since Phase 3.
+It has not bitten because frames arrive at a rate the handler drains faster than they stack. Recorded as a latent
+exposure, **not** as a defect fixed here — fixing it would be a behaviour change in a commit whose job is capture.
+
+### Two bugs in the new tests, both found by running them
+
+1. **A test corrupted the environment for 17 others.** `RawTextCapture_UnusablePath_ThrowsAtConstruction`
+   pointed at the class's shared scratch folder, which did not exist yet — so the constructor **created a
+   file named like the folder**, and every later test failed in `Directory.CreateDirectory` because a file
+   occupied its name. The probe test itself failed `Assert.NotNull`: nothing had been rejected. One test, 19
+   failures. Fixed by giving each test a GUID-unique private folder, and by pointing the probe at
+   `Path.GetTempPath()`, a directory that certainly exists — which is what makes it a real probe.
+2. **Wrong arithmetic, not wrong code.** `Assert.Equal(14, capture.CharactersWritten)` failed with `Actual: 18`.
+   `"100,200,300"` is 11 characters and `"400,500"` is 7. The capture was right; the expectation was invented.
+
+Both are recorded because the failure modes are instructive: a green-looking test that had measured nothing, and
+a red test that was the test's fault rather than the code's.
+
+### Finding 12 — the status line is the only surface, and it races with itself
+
+`Open()` raises "Connected to COM12" through `Dispatcher.BeginInvoke`, which lands **after** anything
+`Connect_Click` sets synchronously. So the capture path has to be queued behind it (`Dispatcher.BeginInvoke`
+at the end of `Connect_Click`) or it is overwritten before anyone can read it. Compounding §12.10's Finding 9:
+the status line is the app's only diagnostic surface, it is clipped at the current window width, and the
+capture path is the longest string it ever produces. `Disconnect` does report the path and the character count,
+but on window close that goes to a window already on its way out — so the path must be readable **during** the
+session, not only at the end.
+
+### Finding 13 — this commit changes the toolbar, so it changes the baseline
+
+`Capture log` is a new control in the top bar. §12.1's baseline description predates it, so **both baseline
+images in `docs/baseline/` must be captured from a build that includes this commit**, not from an older one. A
+baseline taken before the checkbox exists will differ from every later screenshot by a control that is not a
+regression. This is the concrete cost of §5 rule 2 (a behaviour change gets its own commit): the behaviour
+change here is small and intentional, and the baseline has to absorb it.
+
+### Evidence
+
+Build: Debug, whole solution, **0 errors / 0 warnings**, 5 projects.
+Tests: **248 / 248 passed / 0 failed / 0 skipped** (222 before this commit; 26 new).
+`ArchitectureInvariantTests`: **15 / 15 pass** — `RawTextCapture` added no dependency to Hardware
+(`HardwareAssemblyReferencesNothingButCore` still green, `System.IO.Ports` still required there).
+
+### What this closes, and what it does not
+
+**Closed:** the structural impossibility. There is now a path from the port to a file, and a test proves the
+file reproduces the stream: bytes arrive in port-shaped chunks (whole, split across a read, CRLF, garbage
+between frames), land unchanged, and replay to the same frames and the same rejected lines the live framing
+path produced.
+
+**Not closed:** no real capture has been taken yet. The parity check against the actual device still needs a
+run with **Capture log** ticked. Release remains unverified — the tooling here cannot select a build
+configuration, so `dotnet build EchoEnvironment.slnx -c Release` still has to be run by hand.
 
 ---
 

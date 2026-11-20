@@ -18,8 +18,18 @@ connected capture is the opposite state. Each is a reference for a different que
 - `pre-phase5-connected.png` — do zone colours, lines, map accumulation and the heat grid survive Phase 5c/5d,
   which deliberately change brushes, layers and axis labels?
 
+## Both images must come from a build that has the `Capture log` checkbox
+
+MIGRATION_PLAN §12.11 Finding 13. The capture commit added a control to the top bar, and §12.1's baseline
+description predates it. A screenshot taken from an older build differs from every later one by a control that
+is not a regression — which is exactly the kind of difference a baseline exists to rule out. Capture both
+images from the same build.
+
 ## Naming rule
 
 Prefix the state, not the phase: `pre-`, `post-`. Phase 5c changes brushes and 5d changes axis labels, so a
 `post-phase5d*.png` will be needed and will legitimately differ from these. A file whose name records only a
 phase number cannot tell a future reader whether a difference is expected or a regression.
+
+
+
