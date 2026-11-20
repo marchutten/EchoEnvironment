@@ -50,6 +50,13 @@ namespace EchoEnvironment
         private readonly ZoneRenderer _zones;
         private readonly OrbitCameraController _orbit;
 
+        /// <summary>
+        /// Phase 5 commit 3 (defect D3): the shared frozen brushes and materials the renderer reuses
+        /// across frames. A field rather than a static so the cache is per window, matching BrushCache's
+        /// own reasoning about not sharing mutable state across a process.
+        /// </summary>
+        private readonly BrushCache _brushes = new();
+
         // Phase 4 (defect D2): frames arrive on the transport thread and are drained by this timer on
         // the UI thread, one per tick. The rate is a declared setting in the toolbar, so frame rate is
         // a UI decision instead of a consequence of the baud rate.
@@ -70,7 +77,7 @@ namespace EchoEnvironment
             // The map group is a local now: its only consumer is ZoneRenderer, which fills it, and
             // root, which places it in the scene. It no longer needs to be a field.
             var mapGroup = new Model3DGroup();
-            _zones = new ZoneRenderer(_points, mapGroup, HeatGrid, MinDistanceMm, MaxDistanceMm, FieldOfViewDegrees, MapBuckets);
+            _zones = new ZoneRenderer(_points, mapGroup, HeatGrid, _brushes, MinDistanceMm, MaxDistanceMm, FieldOfViewDegrees, MapBuckets);
 
             var root = new Model3DGroup();
             root.Children.Add(MeshFactory.CreateSensorMarker());

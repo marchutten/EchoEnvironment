@@ -53,13 +53,28 @@ public sealed class ZoneRenderer
     /// </summary>
     private const double SceneUnitsPerMm = 1.0 / 1000.0;
 
+    /// <summary>
+    /// One frozen zero-scale shared by every zone a frame hides, where the code used to build a new
+    /// ScaleTransform3D per hidden zone per frame. Frozen because it is shared: a Freezable referenced by
+    /// many visuals must not be mutable, or mutating one zone's hiding would hide them all.
+    /// </summary>
+    private static readonly ScaleTransform3D HiddenScale = CreateHiddenScale();
+
     private readonly Model3DGroup _zoneGroup;
     private readonly UniformGrid _heatGrid;
     private readonly GeometryModel3D _lineModel;
     private readonly MeshGeometry3D _cubeMesh;
     private readonly List<GeometryModel3D> _zoneModels = [];
+
+    /// <summary>
+    /// One TranslateTransform3D per zone, created in EnsureZoneModels and mutated every frame. Held in a
+    /// list parallel to _zoneModels so zone index, model and transform stay in step.
+    /// </summary>
+    private readonly List<TranslateTransform3D> _zoneTransforms = [];
+
     private readonly GeometryModel3D[] _mapModels;
     private readonly WorldMap _map;
+    private readonly BrushCache _brushes;
     private readonly double _minDistanceMm;
     private readonly double _maxDistanceMm;
     private readonly double _fieldOfViewDegrees;
@@ -69,13 +84,17 @@ public sealed class ZoneRenderer
         Model3DGroup zoneGroup,
         Model3DGroup mapGroup,
         UniformGrid heatGrid,
+        BrushCache brushes,
         double minDistanceMm,
         double maxDistanceMm,
         double fieldOfViewDegrees,
         int mapBuckets)
     {
+        ArgumentNullException.ThrowIfNull(brushes);
+
         _zoneGroup = zoneGroup;
         _heatGrid = heatGrid;
+        _brushes = brushes;
         _minDistanceMm = minDistanceMm;
         _maxDistanceMm = maxDistanceMm;
         _fieldOfViewDegrees = fieldOfViewDegrees;
@@ -90,6 +109,7 @@ public sealed class ZoneRenderer
             // One material per bucket, created once. The bucket index is the colour, so the ramp is
             // sampled at bucket boundaries rather than per reading.
             var material = new DiffuseMaterial(new SolidColorBrush(ColorScale.For(b * maxDistanceMm / (mapBuckets - 1), maxDistanceMm).ToColor()));
+            material.Freeze();
             _mapModels[b] = new GeometryModel3D { Material = material, BackMaterial = material };
             mapGroup.Children.Add(_mapModels[b]);
         }
@@ -138,7 +158,10 @@ public sealed class ZoneRenderer
 
                 if (mm < _minDistanceMm || mm > _maxDistanceMm)
                 {
-                    model.Transform = new ScaleTransform3D(0, 0, 0);
+                    // One frozen scale shared by every hidden zone, where this used to allocate a new
+                    // ScaleTransform3D per invalid reading per frame. It stays a ScaleTransform3D, so a
+                    // zone hidden this way is still distinguishable from one that was moved.
+                    model.Transform = HiddenScale;
                     continue;
                 }
 
@@ -152,8 +175,25 @@ public sealed class ZoneRenderer
                     r * Math.Sin(el),
                     -r * Math.Cos(el) * Math.Cos(az));
 
-                model.Transform = new TranslateTransform3D(position);
-                ((DiffuseMaterial)model.Material).Brush = new SolidColorBrush(ColorScale.For(mm, _maxDistanceMm).ToColor());
+                // Mutate the zone's own transform instead of replacing it (MIGRATION_PLAN 5b). The old
+                // line built a new TranslateTransform3D for all 64 zones every frame.
+                TranslateTransform3D transform = _zoneTransforms[index];
+                transform.OffsetX = position.X;
+                transform.OffsetY = position.Y;
+                transform.OffsetZ = position.Z;
+                model.Transform = transform;
+
+                // The old line mutated the material's Brush property, which required casting the model's
+                // Material to DiffuseMaterial and allocated a new brush per zone per frame. Assigning a
+                // shared frozen material is both cheaper and free of the cast.
+                //
+                // THE TRAP THIS COMMENT EXISTS FOR: the code it replaces mutated a single material object
+                // that was referenced by both Material and BackMaterial, so front and back faces always
+                // showed the same colour. Replacing only Material would leave BackMaterial painted with
+                // the previous frame's colour. Both are assigned here, from the same cache entry.
+                DiffuseMaterial material = _brushes.MaterialFor(mm, _maxDistanceMm);
+                model.Material = material;
+                model.BackMaterial = material;
                 ScenePrimitives.AddLine(lines, position);
                 if (keepMap)
                 {
@@ -193,12 +233,19 @@ public sealed class ZoneRenderer
             }
         }
 
+        // The cells themselves were already reused between frames (pinned by
+        // HeatGridCellsAreReusedBetweenFrames). What was not reused was their background: a fresh
+        // SolidColorBrush per cell per frame, 64 of them, even when a cell showed the same distance as
+        // the frame before and needed the identical colour. Now a cell that does not change its distance
+        // keeps the same frozen brush instance across frames.
         for (int i = 0; i < distances.Length; i++)
         {
             var cell = (Border)_heatGrid.Children[i];
             int mm = distances[i];
             bool valid = mm >= _minDistanceMm && mm <= _maxDistanceMm;
-            cell.Background = new SolidColorBrush(valid ? ColorScale.For(mm, _maxDistanceMm).ToColor() : InvalidCellColor);
+            cell.Background = valid
+                ? _brushes.BrushFor(mm, _maxDistanceMm)
+                : _brushes.BrushFor(InvalidCellColor);
             ((TextBlock)cell.Child).Text = valid ? mm.ToString() : "-";
         }
     }
@@ -213,13 +260,29 @@ public sealed class ZoneRenderer
         _zoneGroup.Children.Clear();
         _zoneGroup.Children.Add(_lineModel);
         _zoneModels.Clear();
+        _zoneTransforms.Clear();
         for (int i = 0; i < count; i++)
         {
             var material = new DiffuseMaterial(Brushes.White);
             var model = new GeometryModel3D(_cubeMesh, material) { BackMaterial = material };
             _zoneModels.Add(model);
+
+            // One transform per zone, created here and mutated by UpdateFrame for the rest of the
+            // renderer's life. Deliberately NOT frozen: a frozen transform cannot be mutated, and the
+            // whole point is to mutate it instead of replacing it.
+            _zoneTransforms.Add(new TranslateTransform3D());
             _zoneGroup.Children.Add(model);
         }
+    }
+
+    /// <summary>
+    /// The shared hidden scale, built once. See the HiddenScale field for why one instance is enough.
+    /// </summary>
+    private static ScaleTransform3D CreateHiddenScale()
+    {
+        var scale = new ScaleTransform3D(0, 0, 0);
+        scale.Freeze();
+        return scale;
     }
 
     private void RenderMapIfDue()

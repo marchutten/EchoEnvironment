@@ -68,7 +68,11 @@ public class ZoneRendererTests
         // default, so the tests exercise the same path production takes.
         zoneGroup.Transform = new Transform3DGroup();
 
-        var renderer = new ZoneRenderer(zoneGroup, mapGroup, heatGrid, MinMm, MaxMm, FieldOfView, MapBuckets);
+        // The BrushCache is not returned to the caller on purpose. Every reuse assertion in this file
+        // reads the brush or material the renderer actually put on a model, which is observable through
+        // the groups the test already owns. Asking for the cache itself would let a test assert that a
+        // dictionary was consulted instead of that the scene stopped allocating.
+        var renderer = new ZoneRenderer(zoneGroup, mapGroup, heatGrid, new BrushCache(), MinMm, MaxMm, FieldOfView, MapBuckets);
         return (renderer, zoneGroup, mapGroup, heatGrid);
     }
 
@@ -414,6 +418,189 @@ public class ZoneRendererTests
 
             renderer.UpdateFrame(Distances(ZoneCount, 2000), keepMap: true);
             AssertMath.Close(2.0, FirstMapPositionRadius(mapGroup), 0.05, "map radius after the throttle window");
+        });
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Phase 5 commit 3 (defect D3, MIGRATION_PLAN 5a and 5b): the allocations that used to happen
+    // every frame must happen once.
+    //
+    // WHY IDENTITY ASSERTIONS. "The colour is still right" is already pinned by
+    // ZoneColourIsTheCoreRampAtThatDistance, and "the position is still right" by
+    // ValidZonesLieOnASphereInFrontOfTheSensor. What those tests cannot see is whether the renderer
+    // built a new object to express them. Assert.Same is the only assertion that measures the
+    // allocation rather than the value, and an optimisation that is not measured can be undone by the
+    // next edit without anything failing.
+    // -----------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// 5b: the plan's wording is "64 transforms created once in EnsureZoneModels and only mutated in
+    /// UpdateFrame". Measured as the plan states it: the transform object on a zone is the same object
+    /// in the second frame, and its offsets are the second frame's positions.
+    /// </summary>
+    [Fact]
+    public void ZoneTransformIsReusedAcrossFrames_AndMutatedInsteadOfReplaced()
+    {
+        StaRunner.Run(() =>
+        {
+            var (renderer, zoneGroup, _, _) = New();
+
+            renderer.UpdateFrame(Distances(ZoneCount, 1000), keepMap: false);
+
+            var firstFrame = Assert.IsAssignableFrom<TranslateTransform3D>(
+                ((GeometryModel3D)zoneGroup.Children[1]).Transform);
+            double firstOffsetX = firstFrame.OffsetX;
+
+            renderer.UpdateFrame(Distances(ZoneCount, 2000), keepMap: false);
+
+            var secondFrame = Assert.IsAssignableFrom<TranslateTransform3D>(
+                ((GeometryModel3D)zoneGroup.Children[1]).Transform);
+
+            // Same object...
+            Assert.Same(firstFrame, secondFrame);
+
+            // ...and a different position, so the reuse is not a stale transform that was never updated.
+            // Doubling the distance doubles the radius, so X must have moved.
+            Assert.NotEqual(firstOffsetX, secondFrame.OffsetX);
+            AssertMath.Close(2.0, firstOffsetX == 0 ? 1.0 : secondFrame.OffsetX / firstOffsetX, 0.01, "offset doubled with distance");
+
+            // A reused transform must not be frozen, or the mutation would throw.
+            Assert.False(secondFrame.IsFrozen,
+                "a zone transform that UpdateFrame mutates cannot be frozen; freezing it would make the next frame throw instead of move.");
+        });
+    }
+
+    /// <summary>
+    /// An invalid reading used to allocate a fresh ScaleTransform3D. Now one frozen scale is shared by
+    /// every hidden zone in every frame. It stays a ScaleTransform3D, so InvalidReadingHidesItsZoneWithout
+    /// RemovingIt's distinction between "hidden" and "moved" still holds.
+    /// </summary>
+    [Fact]
+    public void HiddenZonesShareOneFrozenScaleAcrossEveryFrame()
+    {
+        StaRunner.Run(() =>
+        {
+            var (renderer, zoneGroup, _, _) = New();
+
+            int[] distances = Distances(ZoneCount, 1000);
+            distances[0] = 5;
+            distances[1] = 9000;
+
+            renderer.UpdateFrame(distances, keepMap: false);
+            var firstHidden = Assert.IsAssignableFrom<ScaleTransform3D>(((GeometryModel3D)zoneGroup.Children[1]).Transform);
+            var secondHidden = Assert.IsAssignableFrom<ScaleTransform3D>(((GeometryModel3D)zoneGroup.Children[2]).Transform);
+
+            // Two zones hidden in the same frame share one object.
+            Assert.Same(firstHidden, secondHidden);
+            Assert.True(firstHidden.IsFrozen,
+                "a scale shared by many models must be frozen; a mutable shared scale would let one zone un-hide another.");
+
+            // And it is still the same object in the next frame.
+            renderer.UpdateFrame(distances, keepMap: false);
+            Assert.Same(firstHidden, ((GeometryModel3D)zoneGroup.Children[1]).Transform);
+        });
+    }
+
+    /// <summary>
+    /// THE TRAP 5a ALMOST INTRODUCED. The code it replaced mutated the Brush of a single material object
+    /// referenced by both Material and BackMaterial, so front and back faces always matched. Replacing
+    /// only Material - which is the obvious way to write an assignment - leaves BackMaterial painted with
+    /// the previous frame's colour, and the back faces of every zone would silently keep an old colour.
+    /// Asserted because the failure mode is invisible in a screenshot of a closed cube.
+    /// </summary>
+    [Fact]
+    public void FrontAndBackMaterialAlwaysComeFromTheSameCacheEntry()
+    {
+        StaRunner.Run(() =>
+        {
+            var (renderer, zoneGroup, _, _) = New();
+
+            renderer.UpdateFrame(Distances(ZoneCount, 1000), keepMap: false);
+
+            for (int i = 1; i <= ZoneCount; i++)
+            {
+                var model = (GeometryModel3D)zoneGroup.Children[i];
+                Assert.Same(model.Material, model.BackMaterial);
+            }
+
+            // Recolour, then check again: the match must survive the change, not just hold at creation.
+            renderer.UpdateFrame(Distances(ZoneCount, 3000), keepMap: false);
+
+            Color expected = ColorScale.For(3000, MaxMm).ToColor();
+            for (int i = 1; i <= ZoneCount; i++)
+            {
+                var model = (GeometryModel3D)zoneGroup.Children[i];
+                var front = Assert.IsAssignableFrom<DiffuseMaterial>(model.Material);
+                var back = Assert.IsAssignableFrom<DiffuseMaterial>(model.BackMaterial);
+
+                Assert.Same(front, back);
+                Assert.Equal(expected, Assert.IsAssignableFrom<SolidColorBrush>(front.Brush).Color);
+                Assert.True(front.IsFrozen, "a material assigned to two slots of a shared model must be frozen.");
+            }
+        });
+    }
+
+    /// <summary>
+    /// The heat grid already reused its cells; what it did not reuse was their background. A cell whose
+    /// distance did not change between frames must keep the same brush instance, and a cell whose
+    /// distance did change must get the new colour, not the old brush recoloured.
+    /// </summary>
+    [Fact]
+    public void HeatGridBackgroundIsReusedWhenADistanceDoesNotChange()
+    {
+        StaRunner.Run(() =>
+        {
+            var (renderer, _, _, heatGrid) = New();
+
+            int[] unchanged = Distances(ZoneCount, 1000);
+            renderer.UpdateFrame(unchanged, keepMap: false);
+            var cell = (Border)heatGrid.Children[0];
+            SolidColorBrush before = Assert.IsAssignableFrom<SolidColorBrush>(cell.Background);
+
+            // Same distance for this cell, different distance for its neighbour.
+            int[] mixed = Distances(ZoneCount, 1000);
+            mixed[1] = 2500;
+            renderer.UpdateFrame(mixed, keepMap: false);
+
+            SolidColorBrush after = Assert.IsAssignableFrom<SolidColorBrush>(cell.Background);
+            Assert.Same(before, after);
+            Assert.True(before.IsFrozen, "a brush shared between cells and frames must be frozen.");
+
+            var neighbour = (Border)heatGrid.Children[1];
+            Assert.Equal(ColorScale.For(2500, MaxMm).ToColor(),
+                Assert.IsAssignableFrom<SolidColorBrush>(neighbour.Background).Color);
+        });
+    }
+
+    /// <summary>
+    /// The out-of-range grey must not come from the ramp, and must stay the same object frame after
+    /// frame. This is the heat-grid half of InvalidReadingShowsADashOnAGreyCell, measured as identity.
+    /// </summary>
+    [Fact]
+    public void InvalidHeatCellGreyIsAFrozenBrushThatIsNotARampColour()
+    {
+        StaRunner.Run(() =>
+        {
+            var (renderer, _, _, heatGrid) = New();
+
+            int[] distances = Distances(ZoneCount, 1000);
+            distances[0] = 5;
+
+            renderer.UpdateFrame(distances, keepMap: false);
+            var grey = Assert.IsAssignableFrom<SolidColorBrush>(((Border)heatGrid.Children[0]).Background);
+
+            renderer.UpdateFrame(distances, keepMap: false);
+            Assert.Same(grey, ((Border)heatGrid.Children[0]).Background);
+
+            Assert.True(grey.IsFrozen);
+            Assert.Equal(Color.FromRgb(50, 50, 50), grey.Color);
+
+            // The grey must not be any colour the ramp can produce for a valid reading, or an invalid
+            // cell would be indistinguishable from a real near-distance one.
+            for (int mm = 20; mm <= 4000; mm += 1)
+            {
+                Assert.NotEqual(grey.Color, ColorScale.For(mm, MaxMm).ToColor());
+            }
         });
     }
 
