@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Windows.Media.Media3D;
@@ -482,5 +483,202 @@ public class ArchitectureInvariantTests
         // the state and the thing that holds it.
         Assert.NotNull(typeof(MainWindow).GetField("_orbit", flags));
         Assert.NotNull(typeof(MainWindow).GetField("_zones", flags));
+    }
+
+    /// <summary>
+    /// Phase 5 commit 4 (defect D8, MIGRATION_PLAN 5c). The window used to own a flat Model3DGroup whose
+    /// meaning depended on the order things were appended to it, and ShowGrid_Click positioned the grid
+    /// with Children.Insert(root.Children.Count - 1, _gridModel) on that same collection. Named layers
+    /// replaced that, and this guard is what stops the flat group coming back.
+    ///
+    /// Written as a name check, in the shape of MainWindowNoLongerOwnsCameraOrZoneState, because a count
+    /// would pass while a flat group crept back under a new name and the positional arithmetic moved with
+    /// it. Names are what a reader looks for when deciding where a behaviour lives.
+    /// </summary>
+    [Fact]
+    public void MainWindowNoLongerOwnsTheFlatSceneGraph()
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+
+        // "_points" was the flat group; "_mapGroup" was the local that used to be a field before it.
+        foreach (string name in new[] { "_points", "_mapGroup", "_root" })
+        {
+            FieldInfo? field = typeof(MainWindow).GetField(name, flags);
+            Assert.True(field is null,
+                $"MainWindow.{name} is back. The sensor viewport's layers moved to SceneLayers at Phase 5 commit 4; "
+                + "restoring a flat group re-opens defect D8, because layer order becomes an insertion sequence again.");
+        }
+
+        Assert.NotNull(typeof(MainWindow).GetField("_layers", flags));
+
+        // And the positional rule itself must be gone from the window's source, not merely discouraged by
+        // a comment: an Insert whose index is computed from a Children.Count is the signature of D8.
+        //
+        // THE GUARD'S OWN BUG, AND WHY IT WAS NOT PAPERED OVER. The first version asserted
+        // DoesNotContain over the whole file and failed - because ShowGrid_Click now contains the old code
+        // quoted verbatim in a comment explaining what was replaced. That is a real hazard in any
+        // source-text guard: a comment that documents a removed defect trips the guard that exists to keep
+        // it removed. Two ways out. Weakening the guard to ignore comments would also ignore the code the
+        // comment describes, which is the case the guard exists for. So the assertion is scoped to the one
+        // method it is about, and the method body is extracted by brace matching - the same technique
+        // FrameCoalescerTests uses for the same reason. The comment stays, and the code is measured.
+        string appDirectory = Path.Combine(FindRepositoryRoot(), "EchoEnvironment");
+        string source = StripLineComments(File.ReadAllText(Path.Combine(appDirectory, "MainWindow.xaml.cs")));
+
+        string showGridHandler = ExtractMethodBody(source, "private void ShowGrid_Click");
+        Assert.DoesNotContain("Children.Insert(", showGridHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("root.Children.Count", showGridHandler, StringComparison.Ordinal);
+
+        // Reaching into the viewport's content is the other half of the defect: the window used to cast
+        // SensorVisual.Content back to a Model3DGroup in order to reach the flat group at all.
+        Assert.DoesNotContain("(Model3DGroup)SensorVisual.Content", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns the body of a method by brace matching, so an assertion can be made about one method instead
+    /// of about a whole file. Copied from FrameCoalescerTests for the same reason FindRepositoryRoot is:
+    /// a guard should not depend on another test class's private helper.
+    /// </summary>
+    private static string ExtractMethodBody(string source, string signatureStart)
+    {
+        int start = source.IndexOf(signatureStart, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"method '{signatureStart}' not found in the App source.");
+
+        int open = source.IndexOf('{', start);
+        Assert.True(open >= 0, $"no body found for '{signatureStart}'.");
+
+        int depth = 0;
+        for (int i = open; i < source.Length; i++)
+        {
+            if (source[i] == '{')
+            {
+                depth++;
+            }
+            else if (source[i] == '}' && --depth == 0)
+            {
+                return source.Substring(start, i - start + 1);
+            }
+        }
+
+        Assert.Fail($"unbalanced braces after '{signatureStart}'.");
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Removes // line comments from source text, so a source-text guard measures code and not prose.
+    ///
+    /// WHY THIS IS NEEDED AT ALL. The first version of MainWindowNoLongerOwnsTheFlatSceneGraph asserted
+    /// that the positional insertion was gone from MainWindow.xaml.cs, and it FAILED - because
+    /// ShowGrid_Click now quotes the code it replaced, verbatim, in a comment explaining what was fixed.
+    /// That is a general hazard in any guard that greps its own source: the comment that documents a
+    /// removed defect trips the guard that exists to keep it removed.
+    ///
+    /// Two ways out, and only one is honest. Deleting the comment would lose the explanation, which is the
+    /// most valuable part of a defect fix. Making the guard ignore the whole file would also ignore the
+    /// code the comment describes - the exact case the guard exists to catch. So the guard strips prose and
+    /// measures code: the comment stays, and the assertion is about what the compiler sees.
+    ///
+    /// THE LIMITATION, stated rather than hidden: this strips from "//" to end of line without parsing, so
+    /// a "//" inside a string literal would be mistaken for the start of a comment. MainWindow.xaml.cs
+    /// contains no such literal. If one is ever added, this helper over-strips and the guard weakens
+    /// silently - which is why it is a helper in a test file and not a general-purpose utility.
+    /// </summary>
+    private static string StripLineComments(string source)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (string line in source.Split('\n'))
+        {
+            int comment = line.IndexOf("//", StringComparison.Ordinal);
+            builder.AppendLine(comment >= 0 ? line[..comment] : line);
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// The one place the order of the sensor viewport's layers is decided. SceneLayers' constructor appends
+    /// exactly four layers to its root; a fifth _root.Children.Add is a new layer whose position somebody
+    /// chose, which is defect D8 returning in a new guise.
+    /// </summary>
+    [Fact]
+    public void SceneLayersIsTheOnlyPlaceThatOrdersTheLayers()
+    {
+        string renderingDirectory = Path.Combine(FindRepositoryRoot(), "EchoEnvironment.Rendering");
+        string layers = File.ReadAllText(Path.Combine(renderingDirectory, "SceneLayers.cs"));
+
+        Assert.Equal(4, CountOccurrences(layers, "_root.Children.Add("));
+
+        // And the viewport is handed the layers rather than a group the window assembled itself.
+        string appSource = File.ReadAllText(Path.Combine(
+            Path.Combine(FindRepositoryRoot(), "EchoEnvironment"), "MainWindow.xaml.cs"));
+        Assert.Contains("SensorVisual.Content = _layers.Root;", appSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE BOARD VIEWPORT IS A SECOND SCENE TREE, and this guard records that rather than pretending it
+    /// does not exist. SceneLayers orders the sensor viewport. The board viewport still has its own
+    /// Model3DGroup built in MainWindow, with CreateWorldAxes in it and the board model plus the labelled
+    /// gizmo inside _boardGroup.
+    ///
+    /// That is deliberate and it is a correction to the plan: MIGRATION_PLAN 5c lists "grid, world axes"
+    /// as back-layer content, which conflates the two viewports. The world axes are not in the sensor
+    /// viewport at all, so putting them in SceneLayers' back layer would move them into a tree they have
+    /// never been in, and defect D9 - the two viewports disagreeing about which axis is which - is about
+    /// the difference between those trees. 5d settles D9; flattening the board viewport into SceneLayers
+    /// first would destroy the thing 5d has to compare.
+    ///
+    /// Asserted as a fact so that the next reader does not "tidy" the board viewport into the layers and
+    /// silently pre-empt 5d.
+    /// </summary>
+    [Fact]
+    public void BoardViewportStillHasItsOwnSceneTree_AndKeepsTheWorldAxesOutOfTheSensorLayers()
+    {
+        string appSource = File.ReadAllText(Path.Combine(
+            Path.Combine(FindRepositoryRoot(), "EchoEnvironment"), "MainWindow.xaml.cs"));
+
+        Assert.Contains("var boardRoot = new Model3DGroup();", appSource, StringComparison.Ordinal);
+        Assert.Contains("BoardVisual.Content = boardRoot;", appSource, StringComparison.Ordinal);
+        Assert.Contains("boardRoot.Children.Add(ScenePrimitives.CreateWorldAxes());", appSource, StringComparison.Ordinal);
+
+        // The world axes must not have crept into the sensor viewport's back layer.
+        string renderingSource = File.ReadAllText(Path.Combine(
+            Path.Combine(FindRepositoryRoot(), "EchoEnvironment.Rendering"), "SceneLayers.cs"));
+        Assert.DoesNotContain("CreateWorldAxes", renderingSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("AddAxes", renderingSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Walks up from this test assembly to the repository root, the same anchor FrameCoalescerTests uses.
+    ///
+    /// Duplicated rather than shared, and deliberately so. FrameCoalescerTests is a test class, not a
+    /// utility, and making an architecture guard depend on another test class's private helper couples two
+    /// unrelated guards to one file's internals. The duplication is three lines and a comment; the coupling
+    /// would be a rename away from a failure that reads as if the architecture broke.
+    /// </summary>
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(Path.GetDirectoryName(typeof(ArchitectureInvariantTests).Assembly.Location)!);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EchoEnvironment.Tests.csproj")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.NotNull(directory);
+
+        string? repoRoot = directory!.Parent?.FullName;
+        Assert.NotNull(repoRoot);
+
+        return repoRoot!;
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        int count = 0;
+        for (int index = text.IndexOf(value, StringComparison.Ordinal); index >= 0; index = text.IndexOf(value, index + 1, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
     }
 }

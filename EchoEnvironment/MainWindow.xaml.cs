@@ -23,7 +23,14 @@ namespace EchoEnvironment
         // not something the window needs to know.
 
         private readonly Model3DGroup _boardGroup = new();
-        private readonly Model3DGroup _points = new();
+
+        /// <summary>
+        /// Phase 5 commit 4 (defect D8): the sensor viewport's layers, named and ordered by SceneLayers.
+        /// This replaced the flat Model3DGroup named _points plus a map group local, whose meaning depended
+        /// on the order things were appended to it.
+        /// </summary>
+        private readonly SceneLayers _layers;
+
         private readonly MatrixTransform3D _orientation = new(Matrix3D.Identity);
         private readonly OrientationFilter _imuFilter = new();
         private long _lastImuTimestamp;
@@ -74,22 +81,26 @@ namespace EchoEnvironment
             // below come from the orbit controller.
             _orbit = new OrbitCameraController(Camera, SensorVisual, ViewBorder);
 
-            // The map group is a local now: its only consumer is ZoneRenderer, which fills it, and
-            // root, which places it in the scene. It no longer needs to be a field.
-            var mapGroup = new Model3DGroup();
-            _zones = new ZoneRenderer(_points, mapGroup, HeatGrid, _brushes, MinDistanceMm, MaxDistanceMm, FieldOfViewDegrees, MapBuckets);
+            // D8 (MIGRATION_PLAN 5c): the scene's layers are named and ordered by SceneLayers, once, in
+            // one constructor. What used to sit here was a flat group built by appending - marker, map,
+            // zones, then the transparent sphere "added last" with a comment explaining that WPF blends
+            // transparent models over what was drawn before - while ShowGrid_Click inserted the grid at
+            // Children.Count - 1 of that same collection.
+            //
+            // The order that comment recorded is still the order that matters, and it is now guaranteed
+            // by construction instead of by an insertion sequence: the transparent reference sphere is
+            // the last layer. The order *between* the opaque layers (grid, map, marker, zones) is now
+            // declared by role rather than by the sequence the old constructor happened to use, because
+            // WPF depth-tests opaque models and the listing order does not decide which is in front.
+            _layers = new SceneLayers(MeshFactory.CreateSensorMarker(), MeshFactory.CreateReferenceSphere(4.0));
 
-            var root = new Model3DGroup();
-            root.Children.Add(MeshFactory.CreateSensorMarker());
-            _points.Transform = _orbit.CreateViewTransform(false, _orientation);
+            // The view transform goes on the zone group, not on the sensor layer: the marker sits still
+            // while the zone fan rotates, exactly as it did when the marker was a separate child of the
+            // flat root.
+            _layers.Zones.Group.Transform = _orbit.CreateViewTransform(false, _orientation);
+            _zones = new ZoneRenderer(_layers.Zones.Group, _layers.Map.Group, HeatGrid, _brushes, MinDistanceMm, MaxDistanceMm, FieldOfViewDegrees, MapBuckets);
 
-            root.Children.Add(mapGroup);
-            root.Children.Add(_points);
-            // Added last: WPF blends transparent models over what was drawn before, so it must not come first.
-            // Phase 5c replaces this positional rule with named layers; until then the comment is the
-            // only thing recording why the order is not free.
-            root.Children.Add(MeshFactory.CreateReferenceSphere(4.0));
-            SensorVisual.Content = root;
+            SensorVisual.Content = _layers.Root;
 
             var boardRoot = new Model3DGroup();
             boardRoot.Children.Add(ScenePrimitives.CreateWorldAxes());
@@ -407,11 +418,23 @@ namespace EchoEnvironment
 
         private void ShowGrid_Click(object sender, RoutedEventArgs e)
         {
-            var root = (Model3DGroup)SensorVisual.Content;
-            root.Children.Remove(_gridModel);
+            // D8, fixed. This used to read:
+            //
+            //     var root = (Model3DGroup)SensorVisual.Content;
+            //     root.Children.Remove(_gridModel);
+            //     root.Children.Insert(root.Children.Count - 1, _gridModel);
+            //
+            // The grid's position was computed as "one before the end of a collection owned by four
+            // different concerns", which is how the rule "the transparent sphere must be last" got
+            // enforced: by an index into somebody else's list. The grid now goes into the grid's own
+            // layer, and no caller reaches into the viewport's content at all.
             if (ShowGridCheckBox.IsChecked == true)
             {
-                root.Children.Insert(root.Children.Count - 1, _gridModel);
+                _layers.ShowGrid(_gridModel);
+            }
+            else
+            {
+                _layers.HideGrid(_gridModel);
             }
         }
 
