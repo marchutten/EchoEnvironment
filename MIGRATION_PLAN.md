@@ -1,8 +1,8 @@
 ﻿# EchoEnvironment — Migration Plan
 
-**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** the serial-capture commit `74e9a55` (§12.11), **23 commits ahead** of `origin/main`, **working tree clean** — Phase 5 commits 1 and 2 are committed, commit 3 is not started. `docs/baseline/pre-phase5-connected.png` arrived at `a995af9`, so a connected-state reference now exists on disk; the disconnected §12.1 image is still missing. Solution builds 0 errors / 0 warnings across **five** projects **in Debug**. ⚠️ **Release has still never been verified** (§7.5 closed it for three projects; §10, §11 and §12.11 all carry it open — the tooling available here cannot select a build configuration, so `dotnet build EchoEnvironment.slnx -c Release` must be run by hand).
-**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · 4 ✅ code complete, gate PARTIALLY closed (§11) · **5 ⏳ commits 1 and 2 done (`bce4b00`, `321c7bc`), commit 3 not started; the §12.1 visual gate is still open in letter (§12.10)** · 6–7 pending.
-**Test suite:** **248 tests, 248 passed, 0 failed, 0 skipped** (130 before Phase 3, 181 before Phase 4, 222 before the capture commit).
+**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `5bc2814` (Phase 5d, §12.12), **28 commits ahead** of `origin/main`; working tree clean apart from untracked `.mcp/` and the new `docs/baseline/pre-phase5e.png`. Phase 5 commits 1–5 are committed; **5e is the next unit of work.** `docs/baseline/pre-phase5-connected.png` exists but predates the capture commit; `pre-phase5.png` (the §12.1 disconnected gate image) is **still missing**, and §12.12 records that §12.1's own description of it now describes the **pre-5d** scene. Solution builds 0 errors / 0 warnings across **five** projects **in Debug**. ⚠️ **Release has still never been verified** (§7.5 closed it for three projects; §10, §11, §12.11 and §12.12 all carry it open — the tooling available here cannot select a build configuration, so `dotnet build EchoEnvironment.slnx -c Release` must be run by hand).
+**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · 4 ✅ code complete, gate PARTIALLY closed (§11) · **5 ⏳ commits 1–5 done (`bce4b00`, `321c7bc`, `95638ec`, `75b0179`, `5bc2814`), 5e not started; the §12.1 visual gate is still open, now against seven commits of which four change pixels — three in the scene, one in the toolbar (§12.12)** · 6–7 pending.
+**Test suite:** **290 tests, 290 passed, 0 failed, 0 skipped** (130 before Phase 3, 181 before Phase 4, 222 before the capture commit, 248 after it, 257 with the captured fixture, 269 after 5a/5b, 280 after 5c).
 **Goal:** split the 755-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
 
 **Governing rule:** *seam first, then move.* Every phase must leave the app runnable and the build green. No phase may mix a behavior change with a structural move.
@@ -1017,7 +1017,7 @@ Frames reach the UI through exactly one path: `ISensorStream.FrameReceived` → 
 
 ---
 
-## 12. Phase 5 record — **in progress**: first half of the move done, gate **not closed** ⚠️
+## 12. Phase 5 record — **in progress**: structural and behavioural moves done, gate **not closed** ⚠️
 
 **Build:** Debug, whole solution, **0 errors / 0 warnings** across **five** projects.
 **Tests:** **196 total, 196 passed, 0 failed, 0 skipped** (was 193; **+3 new guards**).
@@ -1038,8 +1038,10 @@ Provided by the user as a window capture. No tool here can write image bytes, so
 | Render | **60 Hz** |
 | Left 3D view | Empty except one small **orange** sensor marker near centre |
 | Right panel | `Zone distances (mm)` heading, heat grid **empty** |
-| Board view | Green board plane, **red X**, **green Y (up)**, **cyan Z (into −Z)**, with matching letter labels |
+| Board view | Green board plane, **red X**, **green Y (up)**, **cyan Z (into −Z)**, with matching letter labels — **as the pre-5d build drew it.** 5d (`5bc2814`) moved the Z arm to **+Z** and corrected the labels, so this row is now a description of the *defect*, not of the app. See §12.12. |
 | Status line | `Orientation: no IMU data` |
+
+⚠️ **Two problems with this table, both found after §12.12.** The `Show grid` value here (**off**) contradicts `docs/baseline/README.md`, which says **on** for the same image; the gate image must be captured from one agreed state, not either. And the Board view row below describes the **pre-5d** scene — it records defect D9 as though it were the expected appearance — so it is no longer a description of what a current build draws.
 
 Two things this baseline is *not*: it is not a connected scene, so it cannot validate zone colours, lines, map accumulation or the grid; and it is not a substitute for the §11.8 item 3 latency measurement. A comparison against it proves the disconnected scene is unchanged — which is exactly what commit 1 claims, and nothing more.
 
@@ -1243,7 +1245,7 @@ Status line: `Frames: 31 (64 zones, 64 visible, max 1540 mm) | gyro 11,42,-11 ac
 
 ### This is not the §12.1 comparison, and must not be recorded as though it were
 
-§12.1's baseline is a **disconnected** scene, and §12.1 line 1044 says so explicitly: it "cannot validate
+§12.1's baseline is a **disconnected** scene, and §12.1 says so in its own closing paragraph: it "cannot validate
 zone colours, lines, map accumulation or the grid." This capture is the opposite state — connected, IMU
 live, 64 zones populated. **A pixel diff against §12.1 is still impossible between these two states**, so
 the gate's literal clause remains open. What this capture provides instead is different and, for commit 2,
@@ -1287,9 +1289,9 @@ the bounded value sitting at -86.8° in the Roll slot is the tilt, and it says t
 vertical.
 
 `OrientationAngleMappingTests` already pins this numerically (`DefectD1_CurrentFormatStringPrintsRollUnderThePitchLabel`,
-and lines 205–216 which assert the two expressions "must measure different quantities or the label swap
-would be harmless"). §5 line 559 and §11.8 line 1014 have carried "the physical tilt has not been done"
-for four sections. **This capture is the closest that obligation has come to being met** — but it does not
+and the assertions that the two expressions "must measure different quantities or the label swap would be
+harmless"). §5 and §11.8 have carried "the physical tilt has not been done" for four sections. **This capture is
+the closest that obligation has come to being met** — but it does not
 close it: the physical pose of the board is still unknown to the record, and 6a's human half is defined as
 confirming which label is wrong *in the user's terms*.
 
@@ -1305,9 +1307,9 @@ introduced by Phase 5:
 - `CreateWorldAxes` (unlabelled thin boxes) lives in `boardRoot`, which is **untransformed** and stays fixed.
 
 So one viewport currently contains two axis conventions, one rotating with attitude and one fixed, and at a
-~87° tilt the disagreement is stark. That is defect **D9** (§5 line 448, Phase 5d), unchanged by the moves
-— §12.2 line 1091 already records that the two axis sets were deliberately moved as-is. This capture is the
-first time it is visible on real hardware, and it is the reason 5d changes pixels.
+~87° tilt the disagreement is stark. That is defect **D9** (§2 Phase 5 step 5d), unchanged by the moves — §12.2
+already records that the two axis sets were deliberately moved as-is. This capture is the first time it is
+visible on real hardware, and it is the reason 5d changes pixels. **§12.12 closed D9 at `5bc2814`.**
 
 ### Finding 7 — the device's accelerometer scale does not match the test fixture's
 
@@ -1327,8 +1329,9 @@ These angles are early-run values and are worth re-reading after a longer run.
 
 ### Finding 8 — the hardware is connected and the app cannot capture what it receives
 
-This is the actionable one. "Capture a real serial log" has been carried forward since Phase 3 (§2 line 371,
-§4 line 544, §10 line 859, §10.9 line 931, §11.8 line 1010, §12.8 line 1112) and is still unsatisfied.
+This is the actionable one. "Capture a real serial log" has been carried forward since Phase 3 (§2, §4, §10,
+§10.9, §11.8 and §12.8 each repeat the obligation) and was, at the time of writing, still unsatisfied.
+**§12.11 closed it.**
 
 Verified by search across all four non-test projects: **no writer of any kind exists** — zero matches for
 `StreamWriter`, `TextWriter`, `FileStream`, `File.Create`, `File.OpenWrite`, `File.AppendAllText`,
@@ -1470,6 +1473,63 @@ path produced.
 run with **Capture log** ticked. Release remains unverified — the tooling here cannot select a build
 configuration, so `dotnet build EchoEnvironment.slnx -c Release` still has to be run by hand.
 
+---
+
+## 12.12 Phase 5 commits 3–5 — the behavioural half, and why the baseline now has to be re-taken
+
+| Commit | Scope | Defect | Tests after |
+|---|---|---|---|
+| `95638ec` | 5a/5b — `BrushCache`; brushes, materials and `TranslateTransform3D` created once and mutated, replacing ~128 `SolidColorBrush` and 64 transform allocations **per frame** | D3 | 269 |
+| `75b0179` | 5c — `SceneLayers`; named containers replace the `(Model3DGroup)SensorVisual.Content` cast and `Children.Count - 1` positional insertion | D8 | 280 |
+| `5bc2814` | 5d — `AxisConvention`; one letter → axis → colour mapping, both gizmos loop over it | D9 | **290** |
+
+All three change pixels. §2 Phase 5 permits that; §12.1's gate exists to check it. **The gate has still not been run**, and it is now open against **seven** code commits since the pre-Phase-5 baseline (`bce4b00`, `321c7bc`, `74e9a55`, `f15ae33`, `95638ec`, `75b0179`, `5bc2814`). Four of them change pixels: `95638ec`, `75b0179` and `5bc2814` change the rendered **scene**, and `74e9a55` adds a **toolbar control** (§12.11 Finding 13) — a difference that is not a regression, which is exactly what a baseline exists to rule out.
+
+### D9 was two defects, and the serious half was not in the plan
+
+§2 Phase 5 step 5d frames D9 as the two gizmos disagreeing *with each other*. The worse half was one gizmo disagreeing *with itself*: `AddAxes` drew an arm physically long along **−Z** and labelled it **"Y"**, and an arm along **+Y** labelled **"Z"**. That is provable from the source with no reference frame at all — whatever the world frame is meant to mean, an arm long along one axis and labelled with another is wrong on its own terms.
+
+The X arm was correct. **Two wrong labels out of three still reads as a working axis gizmo at a glance**, which is why this survived four phases of review.
+
+### The negative control, and why a green suite proves nothing here
+
+`ScenePrimitivesTests.ThePairingDetectorRejectsThePreFixGizmo` rebuilds the pre-5d gizmo from the literals `ScenePrimitives` used to contain, measures it with the same helpers, and asserts the pairing breaks on exactly two of three arms. A test written *after* a fix can pass for reasons unrelated to the fix; this is the test that fails if the pairing assertion is ever weakened until it tolerates a mislabelled arm.
+
+### Findings 23–27
+
+**Finding 23 — the detector's own bug was evidence for the change.** The negative control first reused `AddAxes`' interleaved layout (arm, label, arm, label) against the legacy gizmo's grouped layout (three arms, then three labels) and failed with `Expected EmissiveMaterial, Actual DiffuseMaterial` — it had read an **arm** where it expected a **label**. The layouts genuinely differ, and a test that assumes a scene graph's ordering silently inspects the wrong object: D8's hazard, met from the other side.
+
+**Finding 24 — a unit vector is not a length.** The central assertion compared `AxisConvention.Direction` (unit, component 1) against a measured arm end (0.5 = `GizmoLength`) and failed "expected 1, got 0.5". The gizmo was correct; the assertion was not. The load-bearing content is the **sign** and the **axis**, not the magnitude, which is whatever length the caller asked for.
+
+**Finding 25 — a measurement helper assumed the shape its name suggested.** `Measure()` asserted eight mesh corners unconditionally and failed on axis labels, which are flat four-corner quads.
+
+**Finding 26 — `Vector3D` has no indexer.** Three CS0021 errors from `vector[index]`. `Component(vector, axis)` as a switch names the component it reads; a wrong axis letter then fails loudly instead of reading a neighbouring component.
+
+**Finding 27 — a project-registration tool put a test file into a non-test assembly.** `set_file_project_status` injected `<Compile Include="..\EchoEnvironment.Tests\ScenePrimitivesTests.cs" Link="…" />` into `EchoEnvironment.Rendering.csproj`, which would compile a test class into the Rendering assembly. Reverted, and `git status` confirms the csproj is net-unchanged. `EchoEnvironment.Tests` is SDK-style with implicit globs, so the call was **unnecessary as well as wrong** — no registration is needed for a new file there.
+
+### What 5d deliberately did not fix, and does not pretend to fix
+
+Agreeing on a mapping does not make the two gizmos point the same way on screen, and they should not. `AddAxes` lives in `_boardGroup`, which carries the orbit's view transform and the sensor's orientation, so it rotates with the board's attitude; `CreateWorldAxes` lives in `boardRoot`, untransformed. A sensor gizmo that pointed where the world gizmo points would be lying about the sensor's attitude. What agreement buys is that the comparison a viewer makes between them is *meaningful*. Finding 6's on-screen disagreement is therefore still open: the model remap that contributes to it is a geometry change, not a labelling one.
+
+### The baseline problem these commits create
+
+Three separate problems, all of them now blocking the gate:
+
+1. **§12.1's description records defect D9 as if it were the expected appearance.** Its Board view row said "cyan Z (into −Z)". That *was* what the pre-5d build drew — and it was the defect. Anyone diffing a current build against that row will read 5d's fix as a regression. §12.1 has now been annotated as describing the pre-5d scene; the row still needs re-recording from a current build.
+2. **`docs/baseline/README.md` and §12.1 disagree about `Show grid`** — **on** there, **off** in §12.1's control table. Whoever captures the gate image follows one of them and produces a different scene. Resolve before capturing, not after.
+3. **`pre-phase5e.png` exists but records no control state**, so it is not yet evidence for anything; and its `pre-` prefix means "before 5e", not "before Phase 5", contradicting the naming rule in `docs/baseline/README.md`. See that file.
+
+### Evidence
+
+Build: Debug, whole solution, **0 errors / 0 warnings**, 5 projects.
+Tests: **290 / 290 passed / 0 failed / 0 skipped** (248 before the capture commit; 257 with the fixture, 269 after 5a/5b, 280 after 5c).
+`ArchitectureInvariantTests`: **19 / 19** (was 15) — `SceneLayersIsTheOnlyPlaceThatOrdersTheLayers` and `AxisConventionIsTheOnlyPlaceThatNamesAnAxisColour`.
+
+⚠️ **`MainWindow.xaml.cs` is 511 lines.** The handoff recorded **481** at `74e9a55`. It has **grown by 30** during a phase whose stated goal is to thin it. Unexplained at this commit and not accounted for by any test; identifying where those 30 lines came from is the next piece of real work, ahead of 5e.
+
+### Outstanding, unchanged by these commits
+
+The §12.1 pixel diff has still never been performed. `pre-phase5.png` (disconnected) still does not exist. **Release has still never been verified.** `EchoEnvironment\Math` is still an empty directory awaiting `rmdir`. All commits remain unsigned (`gpg: … No secret key`). Latency at 115200 baud and the D5/D7 fixes remain untested on hardware.
 ---
 
 ## 13. Session handoff

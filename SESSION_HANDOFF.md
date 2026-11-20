@@ -1,46 +1,60 @@
 ﻿# Session handoff — read this first
 
-Snapshot taken at end of session, HEAD `74e9a55` (the serial-capture commit, §12.11). Everything below was verified
-against the repo at that point. Anything marked **UNVERIFIED** is a claim, not a fact.
+Snapshot taken at end of session, HEAD `5bc2814` (Phase 5d, §12.12). Everything below was verified against the
+repo at that point. Anything marked **UNVERIFIED** is a claim, not a fact.
 
 ## Where the work stands
 
 | | |
 |---|---|
-| Branch | `main`, **ahead 23 / behind 0** of `origin/main`. **Not pushed.** |
-| Working tree | clean |
-| Last commit | `74e9a55` serial capture (§12.11) — `RawTextCapture`, `Capture log` checkbox |
-| Last code commit before it | `321c7bc` Phase 5 commit 2 |
+| Branch | `main`, **ahead 28 / behind 0** of `origin/main`. **Not pushed.** |
+| Working tree | clean apart from untracked `.mcp/` and `docs/baseline/pre-phase5e.png` |
+| Last commit | `5bc2814` Phase 5d (§12.12) — `AxisConvention`, defect D9 |
+| Commits since the last handoff | `f15ae33` captured fixture · `95638ec` 5a/5b (D3) · `75b0179` 5c (D8) · `5bc2814` 5d (D9) |
 | Build | Debug, whole solution, **0 errors / 0 warnings**, 5 projects |
-| Tests | **248 passed / 0 failed / 0 skipped** (26 new) |
-| `ArchitectureInvariantTests` | 15 / 15 |
-| `MainWindow.xaml.cs` | **481 lines** (827 at the start of Phase 5) |
-| Plan of record | `MIGRATION_PLAN.md`, ends at §12.11 |
+| Tests | **290 passed / 0 failed / 0 skipped** (was 248) |
+| `ArchitectureInvariantTests` | **19 / 19** (was 15) |
+| `MainWindow.xaml.cs` | **511 lines** ⚠️ — was **481** at the last handoff, 827 at the start of Phase 5. **It grew by 30 during a phase whose goal is to thin it.** Unexplained; no test accounts for it. |
+| Plan of record | `MIGRATION_PLAN.md`, ends at §12.12 |
 
 ## Phase 5 status
 
 - **5a — done** (`bce4b00`). `EchoEnvironment.Rendering` created; 12 static members moved.
 - **5b — done** (`321c7bc`). `Core/WorldMap.cs`, `Rendering/ZoneRenderer.cs`, `App/OrbitCameraController.cs`.
-- **Interposed — serial capture** (§12.11). Not a 5x step; inserted because §12.10 Finding 8 showed the
-  capture obligation was structurally impossible, and the hardware was already connected.
-- **5c — NOT STARTED. This is the next unit of work.**
-- **5d — not started** (defect D9, axis conventions).
+- **Interposed — serial capture** (`74e9a55`, §12.11) and **captured fixture** (`f15ae33`). Not 5x steps; inserted because §12.10 Finding 8 showed the capture obligation was structurally impossible, and the hardware was already connected.
+- **5a/5b brush and transform reuse — done** (`95638ec`, defect D3). ~128 `SolidColorBrush` + 64 `TranslateTransform3D` allocations per frame replaced with cached, mutated instances.
+- **5c — done** (`75b0179`, defect D8). `SceneLayers`: named containers replace the `(Model3DGroup)SensorVisual.Content` cast and `Children.Count - 1` positional insertion.
+- **5d — done** (`5bc2814`, defect D9). `AxisConvention`: one letter → axis → colour mapping; both gizmos loop over it. **D9 turned out to be two defects — see §12.12.**
+- **5e — NOT STARTED. This is the next unit of work.**
 
-## 5c scope, as agreed
+## 5e scope, as agreed
 
-Behavioural, not structural: brush reuse, transform reuse, named layers, axis relabelling. **These change
-pixels.**
+Behavioural, not structural: remove the `ToArray()` copies in `RenderFrame` and the `out int[]` parser wrapper
+(§12.8 item 4). The wrapper has **zero production call sites**; deleting it touches 29 test call sites and
+nothing else. Unlike 5a–5d this should change **no pixels**, which makes it the safe commit to land after a
+human has looked at 5d's axis change.
 
-## The gate: open in letter, changed in kind
+## The gate: open in letter, and now open against seven commits
 
 The §12.1 pixel diff has **still not been done**. It cannot be done against the connected capture — §12.1's
-baseline is a *disconnected* scene and says so at line 1044. What §12.10 closed instead: commit 5b's
+baseline is a *disconnected* scene and says so in its own closing paragraph. What §12.10 closed instead: commit 5b's
 checkbox→renderer→map rewiring is demonstrated working on live hardware.
+
+**What changed since then:** 5a/5b, 5c and 5d have all landed, and all three change pixels — brushes and
+materials, layer order, and axis labels. The gate was always going to be read against those changes; it is now
+the only remaining evidence for them, and no automated test can substitute for it. §12.12 records three
+problems that must be resolved **before** a capture is taken, not after.
 
 ## Now possible, and the next human step
 
-**Tick `Capture log`, connect, run, and save the file.** That closes an obligation carried since Phase 3
-(§2 line 371, §4 line 544, §10 line 859, §10.9 line 931, §11.8 line 1010, §12.8 line 1112).
+**Closed since the last handoff:** a real capture has been taken and committed as a test fixture (`f15ae33`,
+257 tests at that point). The obligation carried since Phase 3 (§2, §4, §10, §10.9, §11.8 and §12.8 each repeat
+it) is discharged.
+
+**The next human step is the one no tool here can do: take the §12.1 gate screenshot.** Before taking it,
+resolve the three problems §12.12 lists — which `Show grid` value the gate image uses, and the fact that §12.1's
+description of the board view describes the pre-5d scene. Capturing first and discovering the disagreement after
+produces an image that cannot be interpreted.
 
 - Captures land in `bin\<configuration>\net10.0-windows\captures\`, named
   `<port>-<baud>-<timestamp>.txt`. That folder is **inside `bin/`, so it is gitignored** — a capture is not
@@ -55,9 +69,13 @@ checkbox→renderer→map rewiring is demonstrated working on live hardware.
 A baseline taken before the checkbox exists differs from every later screenshot by a control that is not a
 regression.
 
-`docs/baseline/` exists and `pre-phase5-connected.png` is committed at `a995af9` (84,855 bytes) — but it was
-captured **before** `74e9a55`, so it shows no `Capture log` control. It is valid as a scene reference for Phase 5
-commit 2 and is not valid for a toolbar comparison. The disconnected §12.1 image is **still missing**.
+`docs/baseline/` holds `pre-phase5-connected.png` (committed at `a995af9`, 84,855 bytes, **1186 × 748 px**) and
+the new `pre-phase5e.png` (**1192 × 838 px**). The connected image was captured **before** `74e9a55`, so it shows
+no `Capture log` control: valid as a scene reference for Phase 5 commit 2, not valid for a toolbar comparison.
+`pre-phase5e.png` records **no control state**, so it is not yet evidence for anything, and its `pre-` prefix
+means "before 5e" — not "before Phase 5". The disconnected §12.1 gate image is **still missing**, and §12.1's own
+Board view row now describes the **pre-5d** scene, i.e. it records defect D9 as if it were the expected
+appearance. See `docs/baseline/README.md`.
 
 ## Outstanding, unchanged
 
@@ -82,10 +100,27 @@ commit 2 and is not valid for a toolbar comparison. The disconnected §12.1 imag
   which lands after anything `Connect_Click` sets synchronously.
 - **Finding 13** — this commit adds a toolbar control, so it invalidates both baseline images.
 
+## New findings recorded in §12.12
+
+- **Finding 23** — the negative control reused `AddAxes`' interleaved layout against the legacy gizmo's grouped
+  layout and read an **arm** where it expected a **label**. A test that assumes a scene graph's ordering inspects
+  the wrong object.
+- **Finding 24** — compared a unit vector (component 1) against a measured arm end (0.5). The gizmo was right;
+  the assertion was wrong. The load-bearing content is sign and axis, not magnitude.
+- **Finding 25** — a measurement helper asserted eight mesh corners and failed on axis labels, which are
+  four-corner quads.
+- **Finding 26** — `Vector3D` has no indexer (three CS0021).
+- **Finding 27** — `set_file_project_status` injected a `<Compile Include>` for a **test** file into
+  `EchoEnvironment.Rendering.csproj`. Reverted. `EchoEnvironment.Tests` is SDK-style with implicit globs: **new
+  test files need no project registration at all.**
+
 ## UNVERIFIED — do not treat as done
 
-- **5a and 5b are not visually verified.** A crash was reported after 5a and never attributed. 5b moved camera
-  drag, key handlers and zone geometry.
+- **No commit since 5a has been visually verified.** 5a, 5b, 5c and 5d all change pixels. A crash was reported
+  after 5a and never attributed. 5b moved camera drag, key handlers and zone geometry; 5c reordered the scene
+  layers; 5d moved the Z axis arm from −Z to +Z and relabelled two arms.
+- **`MainWindow.xaml.cs` grew 481 → 511** during Phase 5. No test accounts for the 30 lines and no finding
+  explains them. This is a claim about the file, not about a regression: it is unattributed.
 - **No real capture has been taken.** The capture code is tested against synthetic port-shaped chunks; parity
   with the actual device still needs a run with `Capture log` ticked.
 - The angles in the §12.10 capture are **early-run values** (31 frames; `CalibrationSamples = 50`).
