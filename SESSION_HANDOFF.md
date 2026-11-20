@@ -1,15 +1,15 @@
 ﻿# Session handoff — read this first
 
-Snapshot taken at end of session, HEAD `c78a36a` + the serial-capture commit. Everything below was verified
+Snapshot taken at end of session, HEAD `74e9a55` (the serial-capture commit, §12.11). Everything below was verified
 against the repo at that point. Anything marked **UNVERIFIED** is a claim, not a fact.
 
 ## Where the work stands
 
 | | |
 |---|---|
-| Branch | `main`, **ahead 22 / behind 0** of `origin/main`. **Not pushed.** |
+| Branch | `main`, **ahead 23 / behind 0** of `origin/main`. **Not pushed.** |
 | Working tree | clean |
-| Last commit | serial capture (§12.11) — `RawTextCapture`, `Capture log` checkbox |
+| Last commit | `74e9a55` serial capture (§12.11) — `RawTextCapture`, `Capture log` checkbox |
 | Last code commit before it | `321c7bc` Phase 5 commit 2 |
 | Build | Debug, whole solution, **0 errors / 0 warnings**, 5 projects |
 | Tests | **248 passed / 0 failed / 0 skipped** (26 new) |
@@ -53,7 +53,11 @@ checkbox→renderer→map rewiring is demonstrated working on live hardware.
 
 **Baseline images must be captured from a build that includes the `Capture log` checkbox** (§12.11 Finding 13).
 A baseline taken before the checkbox exists differs from every later screenshot by a control that is not a
-regression. `docs/baseline/` exists; both expected files are still missing.
+regression.
+
+`docs/baseline/` exists and `pre-phase5-connected.png` is committed at `a995af9` (84,855 bytes) — but it was
+captured **before** `74e9a55`, so it shows no `Capture log` control. It is valid as a scene reference for Phase 5
+commit 2 and is not valid for a toolbar comparison. The disconnected §12.1 image is **still missing**.
 
 ## Outstanding, unchanged
 
