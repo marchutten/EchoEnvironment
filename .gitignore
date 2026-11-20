@@ -27,3 +27,9 @@ packages/
 *.log
 *.bak
 *.swp
+
+# Capture drops. The capture tee writes into the executable's own captures folder, which [Bb]in/
+# already swallows; this rule is for copies parked at the repo root, which nothing else ignores.
+# It does NOT cover the checked-in fixture, which lives in EchoEnvironment.Tests/TestData and is
+# deliberately tracked.
+captures/
