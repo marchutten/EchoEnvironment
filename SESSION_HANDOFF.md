@@ -1,15 +1,16 @@
 ﻿# Session handoff — read this first
 
-Snapshot taken at end of session, HEAD `5bc2814` (Phase 5d, §12.12). Everything below was verified against the
-repo at that point. Anything marked **UNVERIFIED** is a claim, not a fact.
+Snapshot taken at end of session. HEAD was `5bc2814` (Phase 5d, §12.12); `fbc62e7` recorded the baseline capture and
+this commit records its control state, so HEAD is now the docs commit that follows `fbc62e7`. Everything below was
+verified against the repo at that point. Anything marked **UNVERIFIED** is a claim, not a fact.
 
 ## Where the work stands
 
 | | |
 |---|---|
-| Branch | `main`, **ahead 28 / behind 0** of `origin/main`. **Not pushed.** |
-| Working tree | clean apart from untracked `.mcp/` and `docs/baseline/pre-phase5e.png` |
-| Last commit | `5bc2814` Phase 5d (§12.12) — `AxisConvention`, defect D9 |
+| Branch | `main`, **not pushed**. Ahead of `origin/main`: **29** as of `fbc62e7`, **30** including this commit. |
+| Working tree | clean apart from untracked `.mcp/` |
+| Last commit | `fbc62e7` docs (baseline capture recorded) · `5bc2814` Phase 5d (§12.12) — `AxisConvention`, defect D9 |
 | Commits since the last handoff | `f15ae33` captured fixture · `95638ec` 5a/5b (D3) · `75b0179` 5c (D8) · `5bc2814` 5d (D9) |
 | Build | Debug, whole solution, **0 errors / 0 warnings**, 5 projects |
 | Tests | **290 passed / 0 failed / 0 skipped** (was 248) |
@@ -42,8 +43,17 @@ checkbox→renderer→map rewiring is demonstrated working on live hardware.
 
 **What changed since then:** 5a/5b, 5c and 5d have all landed, and all three change pixels — brushes and
 materials, layer order, and axis labels. The gate was always going to be read against those changes; it is now
-the only remaining evidence for them, and no automated test can substitute for it. §12.12 records three
-problems that must be resolved **before** a capture is taken, not after.
+the only remaining evidence for them, and no automated test can substitute for it.
+
+**Two of the three blockers §12.12 listed are now closed** (§12.12 Findings 30 and 31), because the control state
+of the new capture was reported: **connected, `Show grid` off, `Keep map` off, render rate default**. "Default" is
+not vague — `MainWindow.xaml.cs` line 73 declares `DefaultRenderRateHz = 60`, so it **is** 60 Hz. That also settles
+the `Show grid` dispute **in favour of §12.1's table**: neither checkbox declares `IsChecked` in
+`MainWindow.xaml` and the code never sets it, so both are off at startup. The README's `on` was an error.
+
+**One blocker remains open, and it is the one that matters:** §12.1's Board view row still describes the **pre-5d**
+scene. It records defect D9 as though it were the expected appearance, so it must be re-recorded from a current
+build before anyone uses it as a gate.
 
 ## Now possible, and the next human step
 
@@ -51,10 +61,14 @@ problems that must be resolved **before** a capture is taken, not after.
 257 tests at that point). The obligation carried since Phase 3 (§2, §4, §10, §10.9, §11.8 and §12.8 each repeat
 it) is discharged.
 
-**The next human step is the one no tool here can do: take the §12.1 gate screenshot.** Before taking it,
-resolve the three problems §12.12 lists — which `Show grid` value the gate image uses, and the fact that §12.1's
-description of the board view describes the pre-5d scene. Capturing first and discovering the disagreement after
-produces an image that cannot be interpreted.
+**The next human step is the one no tool here can do: take the §12.1 gate screenshot.** Use **§12.1's control
+table** — it is now the agreed state (Finding 30): disconnected, `COM12` / `115200`, `Show grid` **off**, `Keep map`
+**off**, `Render` **60 Hz**. Before using §12.1's table as a *comparison target*, its **Board view row must be
+re-recorded from a current build**: it still describes the pre-5d scene and so records defect D9 as the expected
+appearance. Capturing the gate image is safe; diffing against that row is not.
+
+Separately, **re-capture the connected pair at one window size** (1186 × 748 or 1192 × 838, not both) so
+`pre-phase5-connected.png` and `post-phase5d-connected.png` can actually be diffed.
 
 - Captures land in `bin\<configuration>\net10.0-windows\captures\`, named
   `<port>-<baud>-<timestamp>.txt`. That folder is **inside `bin/`, so it is gitignored** — a capture is not
@@ -70,12 +84,13 @@ A baseline taken before the checkbox exists differs from every later screenshot 
 regression.
 
 `docs/baseline/` holds `pre-phase5-connected.png` (committed at `a995af9`, 84,855 bytes, **1186 × 748 px**) and
-the new `pre-phase5e.png` (**1192 × 838 px**). The connected image was captured **before** `74e9a55`, so it shows
-no `Capture log` control: valid as a scene reference for Phase 5 commit 2, not valid for a toolbar comparison.
-`pre-phase5e.png` records **no control state**, so it is not yet evidence for anything, and its `pre-` prefix
-means "before 5e" — not "before Phase 5". The disconnected §12.1 gate image is **still missing**, and §12.1's own
-Board view row now describes the **pre-5d** scene, i.e. it records defect D9 as if it were the expected
-appearance. See `docs/baseline/README.md`.
+`post-phase5d-connected.png` (**1192 × 838 px**, renamed from `pre-phase5e.png` once its state was reported:
+connected, `Show grid` off, `Keep map` off, render default = 60 Hz; port/baud not reported). The connected image
+was captured **before** `74e9a55`, so it shows no `Capture log` control: valid as a scene reference for Phase 5
+commit 2, not valid for a toolbar comparison. The two are now a **matched connected pair** — same control settings
+on both sides — but their **window sizes differ**, so a pixel diff is blocked until one is re-captured at the other
+size. The disconnected §12.1 gate image is **still missing**, and §12.1's own Board view row still describes the
+**pre-5d** scene, i.e. it records defect D9 as if it were the expected appearance. See `docs/baseline/README.md`.
 
 ## Outstanding, unchanged
 
@@ -114,6 +129,22 @@ appearance. See `docs/baseline/README.md`.
   `EchoEnvironment.Rendering.csproj`. Reverted. `EchoEnvironment.Tests` is SDK-style with implicit globs: **new
   test files need no project registration at all.**
 
+- **Finding 30** — the `Show grid` dispute was closed **from the source**, not from the documents: neither checkbox
+  declares `IsChecked` in `MainWindow.xaml` and the code never sets it, so both are **off** at startup; and
+  `DefaultRenderRateHz = 60` (line 73) makes "default" mean **60 Hz**. §12.1's table was the correct side; the
+  README's `on` was an error.
+- **Finding 31** — with its control state reported, the new capture becomes the *post* half of a matched connected
+  pair against `pre-phase5-connected.png`: same `Show grid` / `Keep map` / render rate on both sides, so a
+  difference between them is attributable to the Phase 5 commits rather than to the controls. Renamed
+  `pre-phase5e.png` → `post-phase5d-connected.png`. **The windows are still different sizes** (1186 × 748 against
+  1192 × 838), which blocks a pixel diff on dimensions alone.
+- **Finding 32** — `EchoEnvironment.slnx` names baseline images as `<File Path="…" />` entries, so renaming
+  `pre-phase5e.png` left the solution pointing at a deleted file. No build or test reports that. **Renaming a
+  baseline image is a two-file change.**
+- **Finding 33** — using `replace_file_lines` as a read-only "probe" to settle a question about file contents
+  corrupted the line it was probing (`74e9a55` → `74e955`, "goal **is** to thin it" → "goal to thin it"). A probe
+  writes what you type. `git diff` against HEAD is the ground truth for content questions.
+
 ## UNVERIFIED — do not treat as done
 
 - **No commit since 5a has been visually verified.** 5a, 5b, 5c and 5d all change pixels. A crash was reported
@@ -121,8 +152,10 @@ appearance. See `docs/baseline/README.md`.
   layers; 5d moved the Z axis arm from −Z to +Z and relabelled two arms.
 - **`MainWindow.xaml.cs` grew 481 → 511** during Phase 5. No test accounts for the 30 lines and no finding
   explains them. This is a claim about the file, not about a regression: it is unattributed.
-- **No real capture has been taken.** The capture code is tested against synthetic port-shaped chunks; parity
-  with the actual device still needs a run with `Capture log` ticked.
+- **Capture/replay parity has not been compared frame-by-frame.** A real capture **has** been taken and committed
+  as a fixture (`f15ae33`), which discharges the obligation §2, §4, §10, §10.9, §11.8 and §12.8 each carried. What
+  has **not** been done is the comparison: replay the fixture and diff its frames against what the live app drew,
+  expecting the documented trailing-frame divergence (§12.11 Finding 10).
 - The angles in the §12.10 capture are **early-run values** (31 frames; `CalibrationSamples = 50`).
 - Whether the filter classifies the captured board as at rest depends on the learned gyro bias — not established.
 

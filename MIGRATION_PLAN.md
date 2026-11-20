@@ -854,7 +854,7 @@ A close-and-reopen of `EchoEnvironment.slnx` was performed after Phase 2's gate 
 
 ## 10. Phase 3 record — code complete, gate **partially** closed ⚠️
 
-**Build:** Debug, whole solution, **0 errors / 0 warnings** across **four** projects. `EchoEnvironment.Hardware\bin\Debug\net10.0-windows\EchoEnvironment.Hardware.dll` was produced and verified on disk (PE headers checked). ⚠️ **Release was NOT verified for Hardware:** `EchoEnvironment.Hardware\bin\Release` and `obj\Release` do not exist, and the available build tool exposes no configuration parameter. §7.5's Release gate was closed for three projects; a **fourth** project now inherits `TreatWarningsAsErrors` and has never been built in Release. Run `dotnet build EchoEnvironment.slnx -c Release` in a terminal before Phase 4."
+**Build:** Debug, whole solution, **0 errors / 0 warnings** across **four** projects. `EchoEnvironment.Hardware\bin\Debug\net10.0-windows\EchoEnvironment.Hardware.dll` was produced and verified on disk (PE headers checked). ⚠️ **Release was NOT verified for Hardware:** `EchoEnvironment.Hardware\bin\Release` and `obj\Release` do not exist, and the available build tool exposes no configuration parameter. §7.5's Release gate was closed for three projects; a **fourth** project now inherits `TreatWarningsAsErrors` and has never been built in Release. Run `dotnet build EchoEnvironment.slnx -c Release` in a terminal before Phase 4.
 **Tests:** **181 total, 181 passed, 0 failed, 0 skipped** (was 130; **+51 new tests**).
 **Gate:** clause 1 (real hardware behaves identically) — **NOT verified, requires a hardware session.** Clause 2 (`ReplaySensorStream` reproduces a captured log frame-for-frame) — **NOT satisfied: the repo still has no capture.** What was substituted is a synthetic log, which proves the class replays a log correctly and proves nothing about the device.
 
@@ -1041,7 +1041,7 @@ Provided by the user as a window capture. No tool here can write image bytes, so
 | Board view | Green board plane, **red X**, **green Y (up)**, **cyan Z (into −Z)**, with matching letter labels — **as the pre-5d build drew it.** 5d (`5bc2814`) moved the Z arm to **+Z** and corrected the labels, so this row is now a description of the *defect*, not of the app. See §12.12. |
 | Status line | `Orientation: no IMU data` |
 
-⚠️ **Two problems with this table, both found after §12.12.** The `Show grid` value here (**off**) contradicts `docs/baseline/README.md`, which says **on** for the same image; the gate image must be captured from one agreed state, not either. And the Board view row below describes the **pre-5d** scene — it records defect D9 as though it were the expected appearance — so it is no longer a description of what a current build draws.
+⚠️ **Two problems with this table, both found after §12.12.** The `Show grid` value here (**off**) contradicted `docs/baseline/README.md`, which said **on** for the same image. **§12.12 Finding 30 closed that in favour of this table**: neither checkbox declares `IsChecked` in `MainWindow.xaml` and the code never sets it, so both are off at startup, and `DefaultRenderRateHz = 60` confirms the Render row. **This table is the agreed state for the gate image.** The Board view row below still describes the **pre-5d** scene — it records defect D9 as though it were the expected appearance — so it is no longer a description of what a current build draws.
 
 Two things this baseline is *not*: it is not a connected scene, so it cannot validate zone colours, lines, map accumulation or the grid; and it is not a substitute for the §11.8 item 3 latency measurement. A comparison against it proves the disconnected scene is unchanged — which is exactly what commit 1 claims, and nothing more.
 
@@ -1513,11 +1513,74 @@ Agreeing on a mapping does not make the two gizmos point the same way on screen,
 
 ### The baseline problem these commits create
 
-Three separate problems, all of them now blocking the gate:
+Three separate problems. **Two are now closed** by the user reporting the control state of the new capture; one
+remains open, and it is the one that actually blocks the gate.
 
-1. **§12.1's description records defect D9 as if it were the expected appearance.** Its Board view row said "cyan Z (into −Z)". That *was* what the pre-5d build drew — and it was the defect. Anyone diffing a current build against that row will read 5d's fix as a regression. §12.1 has now been annotated as describing the pre-5d scene; the row still needs re-recording from a current build.
-2. **`docs/baseline/README.md` and §12.1 disagree about `Show grid`** — **on** there, **off** in §12.1's control table. Whoever captures the gate image follows one of them and produces a different scene. Resolve before capturing, not after.
-3. **`pre-phase5e.png` exists but records no control state**, so it is not yet evidence for anything; and its `pre-` prefix means "before 5e", not "before Phase 5", contradicting the naming rule in `docs/baseline/README.md`. See that file.
+1. **§12.1's description records defect D9 as if it were the expected appearance.** Its Board view row said "cyan Z (into −Z)". That *was* what the pre-5d build drew — and it was the defect. Anyone diffing a current build against that row will read 5d's fix as a regression. §12.1 has now been annotated as describing the pre-5d scene; the row still needs re-recording from a current build. **Still open.**
+2. ~~**`docs/baseline/README.md` and §12.1 disagree about `Show grid`**~~ — **closed, §12.1 was right.** See Finding 30.
+3. ~~**`pre-phase5e.png` records no control state**~~ — **closed.** State reported and recorded; the file renamed. See Finding 31.
+
+### Finding 30 — the `Show grid` dispute was closed from the source, and §12.1 was the correct side
+
+The README said **on**, §12.1's control table said **off**, for the same gate image. That was not resolvable by
+reading the documents, because both were assertions about an image. It resolved by reading the app:
+
+- `MainWindow.xaml` lines 17–18 declare `ShowGridCheckBox` and `KeepMapCheckBox` with **no `IsChecked`**, and
+  `MainWindow.xaml.cs` never sets `IsChecked` on either. Both are therefore **unchecked at startup**: `off` is the
+  state the app produces when nobody touches it.
+- `MainWindow.xaml.cs` line 73 declares `private const int DefaultRenderRateHz = 60;`, selected at line 124. So the
+  user's word "default" is not vague — **it is 60 Hz**, exactly §12.1's row. The choices are `[15, 30, 60, 120]`
+  (line 72), so 60 is the default rather than merely the first item.
+
+**§12.1's control table is now the agreed state for the gate image.** The README's `on` was an error in the
+README. Worth noting what closed it: the dispute was settled by a fact about the *code* that neither document had
+recorded, even though both documents were arguing about it.
+
+### Finding 31 — the capture is now evidence, and it creates a matched pair that §12.1 never could
+
+State reported: **connected, `Show grid` off, `Keep map` off, render rate default (60 Hz)**. Renamed
+`pre-phase5e.png` → **`post-phase5d-connected.png`**: the old name meant "before 5e" but the capture was taken
+*after* 5a/5b/5c/5d, so a literal reader would have scored 5d's axis relabel as a regression.
+
+With the state recorded, this capture and `pre-phase5-connected.png` share `Show grid` / `Keep map` / render rate
+**on both sides**. That makes a difference between them attributable to the Phase 5 commits instead of to the
+controls — the comparison §12.1's disconnected baseline structurally cannot make. It is still **not** the §12.1
+gate image, which remains disconnected and still missing.
+
+**What still blocks it: the windows are different sizes** — 1186 × 748 against 1192 × 838. A pixel-for-pixel diff
+is meaningless on dimensions alone, before any question of content. The cause is unrecorded; `MainWindow.xaml`
+declares `Height="650" Width="900"`, so *neither* capture is at the XAML size, which points at DPI scaling or a
+resized window rather than a code change. **Re-capture at the same window size as `pre-phase5-connected.png`.**
+
+Port and baud for this capture were not reported and are not recorded. §12.1's table records `COM12` / `115200`;
+the connected pair should record the same, or say that it differs.
+### Finding 32 — a baseline image is referenced by the solution file, so renaming one is a two-file change
+
+`EchoEnvironment.slnx` lists the baseline images as `<File Path="docs/baseline/…png" />` entries inside its
+`/Solution/` folder. Renaming `pre-phase5e.png` → `post-phase5d-connected.png` therefore left the solution
+pointing at a file that no longer exists. **No build error, no test failure, no warning** — the solution simply
+stops showing the image, and the stale entry is invisible to every automated check in this repo. The entry was
+updated in the same commit as the rename.
+
+This also explains an unexpected `EchoEnvironment.slnx | 4 +-` in `git diff`: Visual Studio rewrites `.slnx`
+on its own, reordering project entries and adding `<File>` entries for files opened in the IDE. A diff of the
+solution file is not evidence of a deliberate edit, and needs to be read before it is attributed.
+
+### Finding 33 — using an edit tool as a read-only probe corrupted the line it was probing
+
+Two subagent reads of `MIGRATION_PLAN.md` disagreed about whether particular lines end in a stray `"` character.
+To settle it, `replace_file_lines` was called with the suspected-clean text as `old_lines`: a match would prove
+the character absent, a rejection would prove it present. The logic worked — but **the match path writes the
+content supplied**, and the supplied text had been retyped rather than copied, so the successful edit silently
+introduced two defects into line 1564: the commit hash `74e9a55` became `74e955`, and "goal **is** to thin it"
+became "goal to thin it". Both were restored in the same session.
+
+**The lesson is not about the logic, which was sound, but about the tool it was run through: a probe is not
+read-only.** `git diff` against HEAD is the authoritative answer to "what does this file actually contain" — it
+renders a real trailing `"` as a plain `"` and a real backslash as `\\`, so escaping is decidable from the output
+without touching the file. Both subagent reads also had to be discounted: one reported trailing quotes on lines
+the diff proves clean, and the other reported the opposite on the same lines. Where they disagreed, neither was
+trustworthy, and the file itself settled it.
 
 ### Evidence
 
