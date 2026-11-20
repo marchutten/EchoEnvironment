@@ -8,14 +8,23 @@ namespace EchoEnvironment.Rendering;
 /// <summary>
 /// The drawn things that are not a solid shape: a line, an axis set, an axis label.
 ///
-/// Moved out of MainWindow verbatim at Phase 5 (MIGRATION_PLAN 5). AddAxes and CreateWorldAxes are
-/// the two members defect D9 is about — they disagree with each other about which axis is which —
-/// and they are deliberately NOT reconciled in this commit. Relabelling axes changes pixels, and this
-/// commit is the one the pixel comparison is supposed to prove is neutral. 5d does that on its own.
+/// Moved out of MainWindow verbatim at Phase 5 (MIGRATION_PLAN 5). AddAxes and CreateWorldAxes are the
+/// two members defect D9 is about, and they were deliberately NOT reconciled in that commit: relabelling
+/// axes changes pixels, and commit 1 was the one the pixel comparison was supposed to prove neutral.
+/// They are reconciled here, at 5d, which is the commit Phase 5 allows to change pixels.
 ///
-/// CreateColoredBox is qualified with MeshFactory rather than imported with `using static`: the two
-/// classes are siblings in this assembly, and spelling out which one builds a box is the kind of
-/// detail that stops a later reader assuming they are the same type.
+/// WHAT RECONCILED MEANS, AND WHAT IT DOES NOT MEAN. Both gizmos now read the same AxisConvention, so a
+/// letter means one axis and a colour means one letter everywhere in this file. That fixes the provable
+/// half of D9 - AddAxes drew a blue arm along -Z and labelled it "Y", and a green arm along +Y and labelled
+/// it "Z". It does NOT make the two gizmos point the same way on screen, and they should not: AddAxes lives
+/// in _boardGroup, which carries the sensor's attitude and rotates, while CreateWorldAxes lives in
+/// boardRoot, which is untransformed and stays fixed. A sensor gizmo that pointed where the world gizmo
+/// points would be lying about the sensor. See AxisConvention's class comment for the full separation, and
+/// Finding 6 for the on-screen disagreement as it appeared on real hardware.
+///
+/// CreateColoredBox is qualified with MeshFactory rather than imported with `using static`: the two classes
+/// are siblings in this assembly, and spelling out which one builds a box is the kind of detail that stops
+/// a later reader assuming they are the same type.
 /// </summary>
 public static class ScenePrimitives
 {
@@ -46,15 +55,120 @@ public static class ScenePrimitives
         }
     }
 
+    /// <summary>
+    /// The labelled sensor gizmo: one arm per world axis, each labelled with the letter of the axis it is
+    /// actually drawn along. Rewritten at Phase 5d to derive from AxisConvention.
+    ///
+    /// WHAT IT USED TO BE. Three hand-written boxes and three hand-written letters:
+    ///
+    ///     CreateColoredBox(new Point3D(h, 0, 0),  length, width, width, Colors.Red);
+    ///     CreateColoredBox(new Point3D(0, 0, -h),  width, width, length, Colors.DeepSkyBlue);
+    ///     CreateColoredBox(new Point3D(0, h, 0),   width, length, width, Colors.LimeGreen);
+    ///     CreateAxisLabel("X", new Point3D(length + 0.08, 0, 0),        Colors.Red);
+    ///     CreateAxisLabel("Y", new Point3D(0, 0, -(length + 0.08)),     Colors.DeepSkyBlue);
+    ///     CreateAxisLabel("Z", new Point3D(0, length + 0.08, 0),        Colors.LimeGreen);
+    ///
+    /// Read as drawing rather than as intent: a blue arm drawn along -Z carrying the letter "Y", and a
+    /// green arm drawn along +Y carrying the letter "Z". An arm drawn along one axis and labelled with
+    /// another is wrong on its own terms, with no reference frame needed to prove it. The letters and the
+    /// arms are now produced from one list, so the pairing cannot drift again.
+    ///
+    /// THE Z ARM MOVED FROM -Z TO +Z. -Z is north in this world frame, so the old gizmo labelled the
+    /// negative end of the Z axis with the bare letter "Z". Every arm now runs from the origin to its
+    /// positive end, which is also what CreateWorldAxes already did. This changes pixels, and 5d is the
+    /// commit Phase 5 allows it in.
+    /// </summary>
     public static void AddAxes(Model3DGroup group, double length, double width)
     {
+        ArgumentNullException.ThrowIfNull(group);
+
         double h = length / 2;
-        group.Children.Add(MeshFactory.CreateColoredBox(new Point3D(h, 0, 0), length, width, width, Colors.Red));
-        group.Children.Add(MeshFactory.CreateColoredBox(new Point3D(0, 0, -h), width, width, length, Colors.DeepSkyBlue));
-        group.Children.Add(MeshFactory.CreateColoredBox(new Point3D(0, h, 0), width, length, width, Colors.LimeGreen));
-        group.Children.Add(CreateAxisLabel("X", new Point3D(length + 0.08, 0, 0), Colors.Red));
-        group.Children.Add(CreateAxisLabel("Y", new Point3D(0, 0, -(length + 0.08)), Colors.DeepSkyBlue));
-        group.Children.Add(CreateAxisLabel("Z", new Point3D(0, length + 0.08, 0), Colors.LimeGreen));
+
+        foreach (AxisLabel axis in AxisConvention.WorldAxes)
+        {
+            Vector3D direction = axis.Direction;
+            var end = new Point3D(direction.X, direction.Y, direction.Z);
+            (double sx, double sy, double sz) = BoxExtents(direction, length, width);
+
+            group.Children.Add(MeshFactory.CreateColoredBox(
+                new Point3D(end.X * h, end.Y * h, end.Z * h),
+                sx,
+                sy,
+                sz,
+                axis.GizmoColor));
+
+            group.Children.Add(CreateAxisLabel(
+                axis.Letter,
+                new Point3D(end.X * (length + LabelGap), end.Y * (length + LabelGap), end.Z * (length + LabelGap)),
+                axis.GizmoColor));
+        }
+    }
+
+    /// <summary>
+    /// The unlabelled fixed world reference axes, also derived from AxisConvention so its colours mean the
+    /// same letters the gizmo's colours mean. Rewritten at Phase 5d.
+    ///
+    /// WHY IT STAYS UNLABELLED. It sits in boardRoot, which is untransformed, while the labelled gizmo
+    /// sits in _boardGroup, which rotates with the board's attitude. Two sets of letters in one viewport,
+    /// one of them spinning, is worse than one set of letters and a fixed colour reference. What 5d fixes
+    /// is that blue used to mean "Y" here and "+Z" there; both now mean Z.
+    /// </summary>
+    public static Model3DGroup CreateWorldAxes()
+    {
+        var group = new Model3DGroup();
+        const double length = 1.5;
+        const double thickness = 0.004;
+        double h = length / 2;
+
+        foreach (AxisLabel axis in AxisConvention.WorldAxes)
+        {
+            Vector3D direction = axis.Direction;
+            var end = new Point3D(direction.X, direction.Y, direction.Z);
+            (double sx, double sy, double sz) = BoxExtents(direction, length, thickness);
+
+            group.Children.Add(MeshFactory.CreateColoredBox(
+                new Point3D(end.X * h, end.Y * h, end.Z * h),
+                sx,
+                sy,
+                sz,
+                axis.ReferenceColor));
+        }
+
+        return group;
+    }
+
+    /// <summary>
+    /// Distance from the origin to an axis label, past the end of the arm it labels. Was an inline
+    /// "+ 0.08" repeated three times in AddAxes.
+    /// </summary>
+    private const double LabelGap = 0.08;
+
+    /// <summary>
+    /// The box's three component extents: `along` on the axis's own component, `across` on the other two.
+    /// The world axes are cardinal, so exactly one component of the direction is non-zero and the choice is
+    /// that component. Asserted rather than assumed: a non-cardinal direction would silently produce a box
+    /// that is long in the wrong dimension, which is a geometry defect that renders plausibly.
+    /// </summary>
+    private static (double X, double Y, double Z) BoxExtents(Vector3D direction, double along, double across)
+    {
+        if (Math.Abs(direction.X) > 0.5)
+        {
+            return (along, across, across);
+        }
+
+        if (Math.Abs(direction.Y) > 0.5)
+        {
+            return (across, along, across);
+        }
+
+        if (Math.Abs(direction.Z) > 0.5)
+        {
+            return (across, across, along);
+        }
+
+        throw new ArgumentException(
+            $"Axis directions must be cardinal for the gizmo boxes to be built by component; got ({direction.X}, {direction.Y}, {direction.Z}).",
+            nameof(direction));
     }
 
     public static GeometryModel3D CreateAxisLabel(string text, Point3D center, Color color)
@@ -91,14 +205,4 @@ public static class ScenePrimitives
         return new GeometryModel3D(mesh, material) { BackMaterial = material };
     }
 
-    public static Model3DGroup CreateWorldAxes()
-    {
-        var group = new Model3DGroup();
-        double length = 1.5;
-        double h = length / 2;
-        group.Children.Add(MeshFactory.CreateColoredBox(new Point3D(h, 0, 0), length, 0.004, 0.004, Color.FromRgb(120, 40, 40)));
-        group.Children.Add(MeshFactory.CreateColoredBox(new Point3D(0, h, 0), 0.004, length, 0.004, Color.FromRgb(40, 120, 40)));
-        group.Children.Add(MeshFactory.CreateColoredBox(new Point3D(0, 0, h), 0.004, 0.004, length, Color.FromRgb(40, 80, 120)));
-        return group;
-    }
 }

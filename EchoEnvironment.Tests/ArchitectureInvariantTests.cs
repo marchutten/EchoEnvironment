@@ -648,6 +648,65 @@ public class ArchitectureInvariantTests
     }
 
     /// <summary>
+    /// Defect D9 (MIGRATION_PLAN 5d): the axis letters and their colours must be decided in exactly one
+    /// file, and that file must derive the directions from Core's WorldFrame rather than restate them.
+    ///
+    /// D9 was not only "the two gizmos disagree". It was that each gizmo spelled its own arms and colours by
+    /// hand, so nothing in the codebase stated what blue means. Changing a colour or moving an arm in one
+    /// gizmo would not touch the other, and no compile error would notice. This guard removes the ability to
+    /// do that: ScenePrimitives may not name a colour at all, and both gizmos must loop over the same list.
+    ///
+    /// WHY THE COUNT IS 2 AND NOT "AT LEAST 1". One gizmo looping over AxisConvention and one hand-writing
+    /// its arms is exactly how the two drifted apart. Asserting both loops exist is what stops "one
+    /// convention" from degrading back into two conventions that merely happen to agree today.
+    ///
+    /// WHY ScenePrimitives MAY NOT NAME A COLOUR. The colours are not decoration here: they are the mapping a
+    /// reader uses to tell which arm is which. A colour literal in ScenePrimitives is a second copy of that
+    /// mapping, and a second copy is what D9 was. AxisConvention may name colours; ScenePrimitives may only
+    /// ask which colour belongs to which letter.
+    ///
+    /// WHY THE APP MAY NOT CALL CreateAxisLabel. An axis letter placed by the window is an axis letter
+    /// outside the convention - the same class of defect, moved one layer up. The window asks for a gizmo; it
+    /// does not assemble one.
+    ///
+    /// THE COMMENT TRAP, AGAIN (Finding 20). ScenePrimitives' own doc comment quotes the pre-5d literals
+    /// verbatim - Colors.Red, Colors.DeepSkyBlue, Color.FromRgb(120, 40, 40) - because a fix that does not
+    /// explain the defect it fixes is worth reading twice. A guard grepping the raw file would trip over that
+    /// explanation. StripLineComments strips from "//" to end of line, and a "///" doc-comment line begins
+    /// with "//", so doc comments are stripped too and the assertion measures code. Same stated limitation as
+    /// everywhere else this helper is used: a "//" inside a string literal would be over-stripped.
+    /// </summary>
+    [Fact]
+    public void AxisConventionIsTheOnlyPlaceThatNamesAnAxisColour()
+    {
+        string renderingDirectory = Path.Combine(FindRepositoryRoot(), "EchoEnvironment.Rendering");
+
+        string primitives = StripLineComments(File.ReadAllText(
+            Path.Combine(renderingDirectory, "ScenePrimitives.cs")));
+
+        foreach (string literal in new[] { "Colors.Red", "Colors.DeepSkyBlue", "Colors.LimeGreen", "Color.FromRgb" })
+        {
+            Assert.DoesNotContain(literal, primitives, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(2, CountOccurrences(primitives, "foreach (AxisLabel axis in AxisConvention.WorldAxes)"));
+
+        // AxisConvention must read Core's WorldFrame rather than copy its numbers: one use per axis, and no
+        // hand-built vector that could quietly become a second source of the directions.
+        string convention = StripLineComments(File.ReadAllText(
+            Path.Combine(renderingDirectory, "AxisConvention.cs")));
+        Assert.Equal(3, CountOccurrences(convention, "WorldFrame."));
+        Assert.DoesNotContain("new Vector3D(", convention, StringComparison.Ordinal);
+
+        // And the window asks for a gizmo instead of building one.
+        string appSource = StripLineComments(File.ReadAllText(Path.Combine(
+            Path.Combine(FindRepositoryRoot(), "EchoEnvironment"), "MainWindow.xaml.cs")));
+        Assert.Contains("ScenePrimitives.AddAxes(_boardGroup, 0.5, 0.01);", appSource, StringComparison.Ordinal);
+        Assert.Contains("boardRoot.Children.Add(ScenePrimitives.CreateWorldAxes());", appSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("CreateAxisLabel(", appSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Walks up from this test assembly to the repository root, the same anchor FrameCoalescerTests uses.
     ///
     /// Duplicated rather than shared, and deliberately so. FrameCoalescerTests is a test class, not a
