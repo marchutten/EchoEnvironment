@@ -33,3 +33,9 @@ packages/
 # It does NOT cover the checked-in fixture, which lives in EchoEnvironment.Tests/TestData and is
 # deliberately tracked.
 captures/
+
+# MCP server state. Not part of the project and not something a build or a test depends on. Until
+# this rule existed every status report in MIGRATION_PLAN.md had to say "clean apart from untracked
+# .mcp/", which is the same problem the empty EchoEnvironment/Math directory caused: a tree that is
+# not actually dirty being described, every time, as if it might be.
+.mcp/
