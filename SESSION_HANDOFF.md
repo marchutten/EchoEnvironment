@@ -1,141 +1,145 @@
 ﻿# Session handoff — read this first
 
-Snapshot taken at end of session. HEAD is `8ebfe6d` (§14, Phase 5 closure). Everything below was verified
-against the repo at that point. Anything marked **UNVERIFIED** is a claim, not a fact.
+Snapshot taken at end of session. Everything below was verified against the repo at that point. Anything
+marked **UNVERIFIED** is a claim, not a fact.
 
 ## Where the work stands
 
 | | |
 |---|---|
-| Branch | `main`, **not pushed**. `git_status` at the end of this session: **46 ahead**, **0 behind**, `isClean: true`. Run `git_status` rather than trusting this row — it drifts with every commit, and this document has been wrong about it before. |
+| Branch | `main`, **not pushed**. Run `git_status` for the current ahead/behind rather than trusting any number written here — this document has been wrong about it twice. |
 | Working tree | clean |
-| Last commits | `8ebfe6d` refactor — delete the `out int[]` parser wrapper (§12.8 item 4) · `1f84881` perf — read the frame's own storage instead of copying it per frame (§12.8 item 4) |
-| Commits since the last handoff | `7ea6526` docs (5e reconciled, §12.13) · `218fab1` docs (§12.14 Board row re-recorded) · `7fd0efe` chore (.mcp ignored) · `406c2bf` 6a (D1) · `6152525` CI · `572da12` 6c · `a65203f` README · `bf85d0f` 7 (D4) · `1f84881` · `8ebfe6d` |
+| Last commit | 6b — `MainViewModel` extracted from `MainWindow` (§15) |
 | Build | Debug, whole solution, **0 errors / 0 warnings**, 5 projects |
-| Tests | **340 passed / 0 failed / 0 skipped** |
-| `ArchitectureInvariantTests` | **19 / 19** |
-| `SensorFrameParserTests` | **64 / 64** |
-| `MainWindow.xaml.cs` | **633 lines** ⚠️ — was 511 at the last handoff, 827 before Phase 5. **It grew again, during a phase whose goal is to thin it.** Still unattributed; no test accounts for it. |
-| Plan of record | `MIGRATION_PLAN.md`, ends at §14 |
+| Tests | **343 passed / 0 failed / 0 skipped** |
+| `MainWindow.xaml.cs` | **449 lines** (216 code, 179 comment, 54 blank) — 827 before Phase 5, 633 after it, 449 after 6b. §5's "< 200" is **still not met**. |
+| `MainViewModel.cs` | **439 lines**, new at 6b |
+| Plan of record | `MIGRATION_PLAN.md`, ends at §15 |
 
-## Phase 5 is CODE COMPLETE
+## Phase 6 is CODE COMPLETE (6a, 6b, 6c)
 
-- **5a — done** (`bce4b00`). `EchoEnvironment.Rendering` created; 12 static members moved.
-- **5b — done** (`321c7bc`). `Core/WorldMap.cs`, `Rendering/ZoneRenderer.cs`, `App/OrbitCameraController.cs`.
-- **Interposed — serial capture** (`74e9a55`, §12.11) and **captured fixture** (`f15ae33`).
-- **5a/5b brush and transform reuse — done** (`95638ec`, defect D3).
-- **5c — done** (`75b0179`, defect D8). `SceneLayers`: named containers replace the positional insertion.
-- **5d — done** (`5bc2814`, defect D9). `AxisConvention`: one letter → axis → colour mapping.
-- **5e — delivered inside 5a** (§12.13). Both named deliverables are at `bce4b00`.
-- **§12.8 item 4 — done** (`1f84881`, `8ebfe6d`, §14). The `ToArray()` copies are gone; the `out int[]`
-  parser wrapper is deleted. **This was the last code obligation Phase 5 carried.**
+- **6a — D1 label fix** (`406c2bf`). The format string only; the three expressions were already correct.
+- **6b — `MainViewModel`** (§15). Status text, port list, connect/disconnect and the connection lifecycle,
+  the status-line arithmetic, the orientation readout, keep-map, capture request, render-rate policy.
+  `SetOrientation` is now **private** on the window.
+- **6c — composition root** (`572da12`). `App.OnStartup` constructs the window; `StartupUri` removed from
+  `App.xaml`; `--sim` / `--replay` handled in `AppLaunchOptions.cs`.
 
-## What the two closure commits changed
+## What 6b actually is, in one page
 
-**`1f84881`.** `OrientationFilter.Update` and `ZoneRenderer.UpdateFrame` / `UpdateHeatmap` take
-`ReadOnlySpan<int>`. `RenderFrame` reads `frame.Imu.Span` and `frame.Distances.Span` in place. The status
-line's `distances.Count(...)` / `distances.Max()` became one loop because a span is not `IEnumerable`.
-No index, threshold, clamp or ordering changed. Three new guards in `FrameCoalescerTests`.
+`MainViewModel` is WPF-free. That is not a style choice — `WpfConversionIsConfinedToOneType` forbids any
+public type in the App or Rendering assemblies (other than `WpfMath`, `Window`, `Application`) from naming a
+Core type and a WPF type in the same public surface, and `MainViewModel` must speak Core (`Mat3`,
+`SensorFrame`) and Hardware (`ISensorStream`, `SerialSensorStream`, `PortDescriptor`).
 
-**`8ebfe6d`.** `SensorFrameParser.TryParse(string, out int[], out int[]?)` deleted. Call sites verified
-before deleting: **zero production**, **28 in `SensorFrameParserTests`**. Those 28 keep their original
-assertions and reach the parser through a private test-side adapter, `TryParseLegacy`.
-`SensorFrameOverload_AcceptsAndRejectsExactlyWhatTheArrayOverloadDoes` — which can no longer mean anything
-with one signature left — is replaced by `TheSingleOverload_AcceptsAndRejectsExactlyTheDocumentedShapes`.
+Consequences, all recorded in §15:
 
-## One test failed on the way, and the failure was the test's
+- **§2's "`INotifyPropertyChanged` + `ICommand`" could not be followed literally.** `ICommand` is in
+  PresentationCore. The commands are ordinary public methods; `MainWindow.xaml` keeps its `Click=` handlers.
+  `INotifyPropertyChanged` is fine because it lives in `System.ComponentModel`.
+- **Two status channels, not one.** `Dispatcher` is in PresentationFramework, so the view model cannot
+  marshal. `Status` is written on the UI thread; `TransportAnnounced` carries transport-thread strings that
+  the window queues through its own `Dispatcher`. One property would have reversed the documented ordering
+  where the capture-path message is queued *behind* `Open()`'s own.
+- **The window declares no scene constants any more.** `FieldOfViewDegrees`, `MaxDistanceMm`,
+  `MinDistanceMm`, `MapBuckets` are `MainViewModel`'s and the window reads them. They are **public** consts
+  for that reason, which is why the reflection-based tests needed `BindingFlags.Public` added.
+- **`_portProbe` moved rather than being replaced.** §10.7 said 6c should replace it. It was carried to the
+  view model instead, still a never-opened `SerialSensorStream`, because the port list is a question about
+  the machine and asking `SimulatedSensorStream` answers it with the fake name "SIM".
+- **One ordering change.** `Disconnect` now stops the render timer before disposing the stream (it used to
+  dispose first). Not observable from the UI thread, but it is a real change and it is stated rather than
+  folded into "pure refactor".
 
-`TheStatusLineLoopAgreesWithTheLinqItReplaced([])` threw `InvalidOperationException : Sequence contains no
-elements` from `distances.Max()`. The empty case was **removed, not special-cased**: LINQ throws on an empty
-sequence while the loop leaves `maxMm` at `int.MinValue`, so the two sides cannot both be evaluated, and the
-input is unreachable — `IllegalValueCounts_AreRejected` pins that every token count except 16, 25, 64 and 73
-is rejected. A comment in that test first cited a test name that **does not exist** in the suite; it was
-corrected to name the two real ones. **Check that a test exists before citing it in a comment.**
+## Tests that had to move, and the two that failed first
 
-## The gate: still open, and it is now the ONLY thing Phase 5 owes
+- `DefaultRenderRateIsThePlannedSixtyHertz`, `TheVisibleBandTheStatusLineCountsAgainstIsTheAppsOwnConstants`,
+  `AppVisibleBand` → now read `MainViewModel`, with `BindingFlags.Public` added. **Seven
+  `NullReferenceException`s on the first run** because the lookup still asked only for `NonPublic` members
+  that had legitimately become public.
+- `MainWindowFormatStringPairsEachLabelWithTheVariableOfTheSameName`,
+  `TheAngleExpressionsThemselvesAreUnchangedByTheLabelFix` → now read `MainViewModel.cs`, and additionally
+  assert the pairing and the three expressions are **absent** from `MainWindow.xaml.cs`, so a duplicated copy
+  fails instead of passing in both places.
+- `RenderRateIsAUserVisibleSetting_AndFrameReceivedNoLongerMarshalsPerFrame` → no longer looks for
+  `Stream_FrameReceived` in the window (the window no longer subscribes to the transport). Asserts the
+  window's `_viewModel.FrameArrived += (_, frame) => _coalescer.Write(frame);` subscription and the forwarding
+  handlers in `MainViewModel.cs`.
+- **A guard tripped on its own documentation.** `DoesNotContain("Dispatcher.BeginInvoke")` over
+  `MainViewModel.cs` failed on the class comment that quotes that call while explaining why the type cannot
+  use it. Fixed with `StripLineComments` (duplicated into `FrameCoalescerTests`), not by weakening the
+  assertion. `ExtractMethod` could not be used: the three handlers are expression-bodied, so brace matching
+  would have measured a different method.
 
-The §12.1 pixel diff has **still never been run**. No tool here can capture or diff a window. §12.14
-re-recorded §12.1's Board view row from a current build, so the comparison now has a target worth comparing
-against — previously a diff against §12.1 would have been scored against a description of a convention rather
-than a description of a picture.
+New guards: `MainViewModelIsTheAppState_AndSpeaksNoWpfAtAll`,
+`MainWindowNoLongerOwnsTheConnectionOrTheStatusLine`,
+`TheRenderRateIsDeclaredOnce_NotOnBothTheViewAndTheViewModel`. Each has a positive half so it cannot pass on
+deleted state.
+
+## A tool-use incident, recorded because it nearly destroyed the plan
+
+`replace_file_content` is a **full overwrite**. It was used on `MIGRATION_PLAN.md` to change two lines and
+replaced all 1,793 lines with 4. Recovery attempts made it worse: `git_checkout` was called with a numeric
+`target` (rejected twice, in violation of the repo's own rule 2), and `git_reset --mixed <path>` only
+unstages — it does **not** restore file content. `git_reset --hard` with paths is refused outright by git.
+**The user restored the file.**
+
+Rules that follow, and they are binding for this repo:
+
+- `MIGRATION_PLAN.md` is the single most valuable artifact in the repo and is 1,825 lines. **Never** use
+  `replace_file_content` on it. Use `replace_file_lines` / `insert_file_lines`, bottom-up, from one read.
+- `replace_file_content` is for creating a file or rewriting a whole small file. Before calling it on
+  anything larger, say in one line what it removes in full.
+- To restore one file from HEAD: `git_checkout` with `target: "HEAD"` **and** `paths: ["<file>"]`. Not a
+  number, and not `git_reset --mixed`.
+- If a git call is rejected, stop. A repeated rejected call changes nothing.
+
+## The gates that are still open
+
+1. **§12.1 pixel comparison — never run.** `docs/baseline/pre-phase5.png` does not exist.
+   `pre-phase5-connected.png` (1186 × 748) and `post-phase5d-connected.png` (1192 × 838) cannot be diffed at
+   all. Human step, steps below.
+2. **The app has not been run since Phase 3.** §5's "renders identically after every structural phase" has
+   been re-opened since Phase 3 and never re-satisfied. Phase 6b changes no pixels by claim, and that claim
+   has not been looked at either.
+3. **6a's physical tilt** — inherently manual, and the only way to settle which label is wrong in the user's
+   terms.
+4. **§5's `MainWindow.xaml.cs` < 200 lines** — 449 total / 216 code. Reaching 200 means moving the scene
+   graph out of the window, which §2 does not schedule in Phase 6.
+5. **Release build never verified.** `dotnet build EchoEnvironment.slnx -c Release`. The build tool exposes no
+   configuration parameter. `EchoEnvironment.Hardware` and `EchoEnvironment.Rendering` have no Release output
+   on disk.
 
 **The human step, in order:**
 
-1. **Capture `docs/baseline/pre-phase5.png`** — disconnected, `COM12` / `115200`, `Show grid` **off**,
-   `Keep map` **off**, `Render` **60 Hz**, from a build that has the `Capture log` checkbox (§12.11 Finding
-   13), at a **recorded window size**. Use §12.1's control table: it is the agreed state (Finding 30).
-2. **Diff it against §12.1 + §12.14.** §12.14's Board row is the current expectation; §12.1's old Board row
-   is not. Heed §12.14's two warnings: the board slab reads as a **foreshortened sliver**, not a plane, and
-   one viewport contains **two directions for the same letter** (the transformed gizmo against the
-   untransformed reference axes). Neither is a regression.
-3. **Re-capture the connected pair at ONE window size.** `pre-phase5-connected.png` is 1186 × 748,
-   `post-phase5d-connected.png` is 1192 × 838. A pixel diff is meaningless on dimensions alone.
-4. **Run the app** (§12.8 item 2) — no run has happened since 5a.
+1. Capture `docs/baseline/pre-phase5.png` — disconnected, `COM12` / `115200`, `Show grid` **off**, `Keep map`
+   **off**, `Render` **60 Hz**, at a **recorded window size**, using §12.1's control table (Finding 30).
+2. Diff it against §12.1 + §12.14. §12.14's Board row is the current expectation; §12.1's old Board row is
+   not. Heed §12.14's two warnings: the board slab reads as a **foreshortened sliver**, and one viewport
+   contains **two directions for the same letter**. Neither is a regression.
+3. Re-capture the connected pair at **one** window size.
+4. Run the app, and run `--sim`, which is the Phase 6 gate's own wording ("`--sim` renders").
 
 ## Outstanding, unchanged
 
-- **Release build never run**: `dotnet build EchoEnvironment.slnx -c Release`. Attempted again at this commit
-  and **still not closed** — the build tool exposes no configuration parameter. Evidence it is genuinely open:
-  the only Release artifacts on disk belong to `EchoEnvironment.Core`, `EchoEnvironment` and
-  `EchoEnvironment.Tests`, all stamped `1.0.0+8254fe8…` (Phase 2). **`EchoEnvironment.Hardware` and
-  `EchoEnvironment.Rendering` have no Release output at all.**
-- ~~`EchoEnvironment\Math` empty directory~~ — **CLOSED.** `rmdir` done, verified by direct listing:
-  `EchoEnvironment` now lists nine entries, all files, no subdirectories. Git never saw the directory, so git
-  could not have confirmed this either way.
 - Latency at 115200 baud untested; D5/D7 fixes untested on hardware.
 - **All commits are unsigned.** `GIT_SIGN_COMMITS` is enabled but gpg fails on every commit:
   `skipped "Marc <marc@hutten.name>": No secret key`. Machine configuration, not a repo problem.
 - Status line is clipped at the current window width (§12.10 Finding 9).
+- Phase 7 still owes the `src/` + `tests/` relocation and the WPF 3D normals item.
 
 ## UNVERIFIED — do not treat as done
 
-- **No commit since 5a has been visually verified.** 5a, 5b, 5c and 5d all change pixels. A crash was reported
-  after 5a and never attributed. `1f84881` and `8ebfe6d` are claimed to change **no pixels** — the span change
-  touches only how values are carried, and the deleted wrapper had no production caller — but that claim has
-  not been checked against a screenshot either.
-- **`MainWindow.xaml.cs` grew 511 → 633.** Unattributed. A claim about the file, not about a regression.
-- Capture/replay parity has not been compared frame-by-frame. The fixture exists (`f15ae33`); the comparison
-  does not. Expect the documented trailing-frame divergence (§12.11 Finding 10).
+- **No commit since 5a has been visually verified.** 5a, 5b, 5c, 5d all change pixels. 6b claims to change
+  none; that claim has not been checked against a screenshot.
+- A crash was reported after 5a and never attributed.
+- Capture/replay parity has not been compared frame-by-frame. Expect the documented trailing-frame divergence
+  (§12.11 Finding 10).
 - The angles in the §12.10 capture are **early-run values** (31 frames; `CalibrationSamples = 50`).
-
-## A documentation defect found while closing Phase 5
-
-`MIGRATION_PLAN.md`'s header said **"6–7 pending"**. It is not accurate, and §14 now records the correction.
-Verified against the tree:
-
-| | |
-|---|---|
-| 6c composition root | **EXISTS** — `App.xaml.cs` `OnStartup`, `new MainWindow(source!)` |
-| `StartupUri` in `App.xaml` | **REMOVED** at 6c |
-| `--sim` / `--replay` | **EXISTS** — `AppLaunchOptions.cs` |
-| Phase 7 CI | **EXISTS** — `.github/workflows/build-and-test.yml` |
-| D4 dirty-bucket rebuild | **EXISTS** — `WorldMap._dirtyBuckets` / `TakeDirtyBuckets`, consumed by `ZoneRenderer` |
-| **6b `MainViewModel`** | **DOES NOT EXIST** — no such type in the solution |
-| `MainWindow` view-model ctor | **DOES NOT EXIST** — takes a `SensorSource` (`MainWindow.xaml.cs:96`) |
-| `SetOrientation` public on a `Window` | **STILL PUBLIC** (`MainWindow.xaml.cs:205`) |
-| Phase 7 `src/` + `tests/` relocation | not done |
-| Phase 7 WPF 3D normals | not done |
-
-Phase 5's row in §6's effort table is corrected. Rows 6 and 7 need the same treatment and were **left alone**
-here: this session's job was closing Phase 5, not auditing Phase 6.
-
-## Git protocol that worked
-
-- Always pass `path: "C:\Projects\GitHub\EchoEnvironment"` explicitly.
-- `git_checkout` target must be a ref name, never a number. Restore a file with `git_reset`, not `git_checkout`.
-- Order multiple edits to one file **bottom-up**, all from a single read. This session's 27-edit batch to
-  `SensorFrameParserTests.cs` applied cleanly on that rule.
-- `replace_file_lines` reports `auto_corrected` / `applied_start_line` when a line shifted; read those fields
-  instead of assuming the requested position.
-- A `read_file_lines` result can carry a JSON artifact at the end of a line. Line 4 of `MIGRATION_PLAN.md` was
-  quoted with a trailing `"` that is not in the file, and the first edit against it failed. Re-read before
-  retrying rather than trimming by hand.
-- Report tool output, not intent: `currentBranch`, `ahead`, `behind`, `isClean`, `filesChanged`.
 
 ## Next unit of work
 
-**Not code.** The §12.1 gate screenshot, steps 1–4 above. Four Phase 5 commits change pixels and none of them
-has ever been looked at.
+**Not code.** The §12.1 gate screenshot and a run of the app, including `--sim`. Five phases of commits change
+pixels and none has ever been looked at.
 
-After that: **Phase 6b** (`MainViewModel`, view-model-injected `MainWindow`, `SetOrientation` stops being
-public), and **6a's physical tilt**, the one part of the D1 fix that needs hardware.
+Then Phase 7: the `src/` + `tests/` relocation, the WPF 3D normals item, and the Release build.
