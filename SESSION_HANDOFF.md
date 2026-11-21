@@ -7,7 +7,7 @@ against the repo at that point. Anything marked **UNVERIFIED** is a claim, not a
 
 | | |
 |---|---|
-| Branch | `main`, **not pushed**. Ahead of `origin/main`: **42**, behind **0** — read from `git_status` after the last commit, not from memory. |
+| Branch | `main`, **not pushed**. `git_status` at the end of this session: **46 ahead**, **0 behind**, `isClean: true`. Run `git_status` rather than trusting this row — it drifts with every commit, and this document has been wrong about it before. |
 | Working tree | clean |
 | Last commits | `8ebfe6d` refactor — delete the `out int[]` parser wrapper (§12.8 item 4) · `1f84881` perf — read the frame's own storage instead of copying it per frame (§12.8 item 4) |
 | Commits since the last handoff | `7ea6526` docs (5e reconciled, §12.13) · `218fab1` docs (§12.14 Board row re-recorded) · `7fd0efe` chore (.mcp ignored) · `406c2bf` 6a (D1) · `6152525` CI · `572da12` 6c · `a65203f` README · `bf85d0f` 7 (D4) · `1f84881` · `8ebfe6d` |
