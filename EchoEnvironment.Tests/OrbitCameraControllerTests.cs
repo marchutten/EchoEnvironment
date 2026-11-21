@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Media3D;
 using EchoEnvironment.Core;
+using EchoEnvironment.Rendering;
 using Xunit;
 
 namespace EchoEnvironment.Tests;
@@ -244,6 +245,76 @@ public class OrbitCameraControllerTests
             AssertMath.Matrix(Product(ModelRemap, TurnAboutY), BoardViewTransform(), Tolerance, "board: remap then turn");
             AssertMath.Matrix(Product(HalfTurnAboutX, TurnAboutY), SensorViewTransform(), Tolerance, "sensor: half turn then turn");
         });
+    }
+
+    /// <summary>
+    /// THE OTHER HALF OF §12.1's BOARD VIEW ROW: the green slab itself, not just the gizmo's letters.
+    ///
+    /// §12.1's row says "Green board plane". Measured, the slab is 0.400 x 0.030 x 0.250 in MODEL space —
+    /// thin along model Y, so its face normal is world up — and the board viewport's remap moves that normal
+    /// to viewport +X. The slab's two in-plane extents land on viewport Z (0.400) and viewport Y (0.250).
+    ///
+    /// WHY THAT MATTERS FOR A SCREENSHOT EXPECTATION. The BoardViewport camera sits at (0.9, 0.7, 1.3)
+    /// looking at the origin, so its line of sight is dominated by the Z and Y directions and is close to
+    /// PERPENDICULAR to the slab's normal. A face whose normal is nearly perpendicular to the line of sight is
+    /// seen nearly edge-on. So "green board plane" is true of the model and only partly true of the picture:
+    /// the slab is there, and it is foreshortened. A gate image described as showing a board PLANE will
+    /// otherwise be diffed against a picture showing a sliver, and the difference will be read as a regression
+    /// when it is a consequence of the remap that §12.12 says 5d deliberately left alone.
+    ///
+    /// Asserted from the produced mesh and the produced transform, not from the literals in MeshFactory: the
+    /// extents are read off the mesh corners, and the axis mapping is read off the composed matrix.
+    /// </summary>
+    [Fact]
+    public void BoardSlabIsThinAlongWorldUp_AndTheRemapTurnsThatNormalSidewaysInView()
+    {
+        StaRunner.Run(() =>
+        {
+            GeometryModel3D board = MeshFactory.CreateBoardModel();
+            var mesh = Assert.IsAssignableFrom<MeshGeometry3D>(board.Geometry!);
+            Assert.Equal(8, mesh.Positions.Count);
+
+            double extentX = Extent(mesh, p => p.X);
+            double extentY = Extent(mesh, p => p.Y);
+            double extentZ = Extent(mesh, p => p.Z);
+
+            // The slab as built: wide along X, shallow along Z, thin along Y. Its face normal is model Y.
+            AssertMath.Close(0.400, extentX, Tolerance, "board slab: model X extent");
+            AssertMath.Close(0.030, extentY, Tolerance, "board slab: model Y extent (the thin one, i.e. the face normal)");
+            AssertMath.Close(0.250, extentZ, Tolerance, "board slab: model Z extent");
+
+            Matrix3D view = BoardViewTransform();
+
+            // Where each model axis ends up in the viewport, so the slab's viewport extents follow.
+            AssertDirection("slab normal", AssertMath.Transform(view, WorldFrame.Up), WorldFrame.East, "face normal -> viewport +X (sideways)");
+            AssertDirection("slab width", AssertMath.Transform(view, WorldFrame.East), WorldFrame.North, "0.400 extent -> viewport Z");
+            AssertDirection("slab depth", AssertMath.Transform(view, WorldFrame.South), Down, "0.250 extent -> viewport Y");
+
+            // So in the viewport the slab is thin along X and broad along Y and Z: a face pointing sideways,
+            // which the camera at (0.9, 0.7, 1.3) sees strongly foreshortened.
+            Vec3 cameraToOrigin = new Vec3(-0.9, -0.7, -1.3).Normalized();
+            Vec3 faceNormalInView = AssertMath.Transform(view, WorldFrame.Up);
+            double facing = Math.Abs(AssertMath.Dot(faceNormalInView, cameraToOrigin));
+
+            // facing is |cos(angle between the face normal and the line of sight)|. Near 1 means the face
+            // looks straight at the camera; near 0 means it is edge-on. Asserted as a range rather than a
+            // number because it is a statement about what a screenshot can be expected to show.
+            Assert.True(facing < 0.6,
+                $"the board face is {facing:0.###} of the way toward facing the camera; the row must say whether the slab reads as a plane or as a sliver.");
+        });
+    }
+
+    private static double Extent(MeshGeometry3D mesh, Func<Point3D, double> component)
+    {
+        double min = double.MaxValue;
+        double max = double.MinValue;
+        foreach (Point3D p in mesh.Positions)
+        {
+            min = Math.Min(min, component(p));
+            max = Math.Max(max, component(p));
+        }
+
+        return max - min;
     }
 
     // -----------------------------------------------------------------------------------------
