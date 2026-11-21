@@ -1044,7 +1044,7 @@ Provided by the user as a window capture. No tool here can write image bytes, so
 | Board view | Green board plane, **red X**, **green Y (up)**, **cyan Z (into −Z)**, with matching letter labels — **as the pre-5d build drew it.** 5d (`5bc2814`) moved the Z arm to **+Z** and corrected the labels, so this row is now a description of the *defect*, not of the app. See §12.12. |
 | Status line | `Orientation: no IMU data` |
 
-⚠️ **Two problems with this table, both found after §12.12.** The `Show grid` value here (**off**) contradicted `docs/baseline/README.md`, which said **on** for the same image. **§12.12 Finding 30 closed that in favour of this table**: neither checkbox declares `IsChecked` in `MainWindow.xaml` and the code never sets it, so both are off at startup, and `DefaultRenderRateHz = 60` confirms the Render row. **This table is the agreed state for the gate image.** The Board view row below still describes the **pre-5d** scene — it records defect D9 as though it were the expected appearance — so it is no longer a description of what a current build draws.
+⚠️ **Two problems with this table, both found after §12.12.** The `Show grid` value here (**off**) contradicted `docs/baseline/README.md`, which said **on** for the same image. **§12.12 Finding 30 closed that in favour of this table**: neither checkbox declares `IsChecked` in `MainWindow.xaml` and the code never sets it, so both are off at startup, and `DefaultRenderRateHz = 60` confirms the Render row. **This table is the agreed state for the gate image.** The Board view row is now re-recorded from a current build — see §12.14 — so the last of §12.12's three blockers is closed **on paper**; the image itself is still missing.
 
 Two things this baseline is *not*: it is not a connected scene, so it cannot validate zone colours, lines, map accumulation or the grid; and it is not a substitute for the §11.8 item 3 latency measurement. A comparison against it proves the disconnected scene is unchanged — which is exactly what commit 1 claims, and nothing more.
 
@@ -1650,6 +1650,85 @@ Phase 5d." is now **satisfied**: both gizmos loop over `AxisConvention.WorldAxes
 from `WorldFrame.East/Up/South`, and `ScenePrimitives` contains no colour literal at all
 (`AxisConventionIsTheOnlyPlaceThatNamesAnAxisColour` asserts the absence, the three `WorldFrame.` reads, and
 that **both** gizmos loop — count 2, not "at least 1").
+
+### 12.14 §12.1's Board view row, re-recorded from a current build
+
+§12.12 problem 1 said the row "still needs re-recording from a current build", and §12.13's blocker list said
+the same. It could not be re-recorded before now, for a reason nobody had written down: **nothing in the suite
+read the board viewport's transform.** `CreateViewTransform` appeared zero times in `EchoEnvironment.Tests`.
+The axis tests measure the gizmo in its own model space, which says what the code draws, not what a viewer
+sees. Re-recording the row from those tests would have produced the same mistake the row already contains.
+
+`OrbitCameraControllerTests` (9 cases, added at `32b0289` and `b094b95`) measures the composed matrices. With
+no IMU data — the disconnected gate state, `_orientation = Matrix3D.Identity` — the board viewport's transform
+is the product of `CreateViewTransform(remapModel: true, …)`'s remap and the 90° turn about Y:
+
+```
+ 0  0 -1  0
+ 1  0  0  0
+ 0 -1  0  0
+ 0  0  0  1
+```
+
+and the sensor viewport's (`remapModel: false`) is:
+
+```
+ 0  0 -1  0
+ 0 -1  0  0
+-1  0  0  0
+ 0  0  0  1
+```
+
+Both are asserted to be **rotations**: determinant +1, orthonormal unit rows, zero translation. §4 rates a
+mirrored or transposed scene **High/High**; that risk was closed for the adapter by `WpfMathTests`, but
+`CreateViewTransform` is a second and independent place the two matrix conventions meet, and it was unguarded.
+
+**The row, as a current build draws it.** The `BoardViewport` camera sits at `(0.9, 0.7, 1.3)` looking at the
+origin with `UpDirection="0,1,0"` and `FieldOfView="45"`, so viewport **+Y reads as up on screen, +X as toward
+the right, −Z as away from the viewer**.
+
+| Element | Model space (what the code builds) | Board viewport (what the picture shows) |
+|---|---|---|
+| X arm — `Colors.Red`, labelled "X" | world +X (east) | **viewport −Z: into the screen**, so it reads short |
+| Y arm — `Colors.LimeGreen`, labelled "Y" | world +Y (up) | **viewport +X: toward the right** |
+| Z arm — `Colors.DeepSkyBlue`, labelled "Z" | world +Z (south) | **viewport −Y: downward** |
+| Board slab — `Color.FromRgb(20,110,60)` | 0.400 × 0.030 × 0.250, thin along model Y | face normal → **viewport +X**, i.e. **sideways**; strongly foreshortened |
+| Fixed world reference axes — `CreateWorldAxes`, unlabelled | +X dark red, +Y dark green, +Z dark blue | **untransformed**: dark red right, dark green up, dark blue into the screen |
+
+**Two consequences a viewer has to be told, because both look like defects.**
+
+1. **"Green board plane" is true of the model and only partly true of the picture.** The slab is thin along
+   model Y, so its face normal is world up; the remap turns that normal sideways, and the camera's line of
+   sight is 0.520 of the way from perpendicular to it (`|cos|` between face normal and line of sight, asserted
+   as a range). A face that far off the line of sight is seen strongly foreshortened. A baseline that promises
+   a board **plane** will be diffed against a picture showing a **sliver**, and the difference will be recorded
+   as a Phase 5 regression when it is a consequence of the remap §12.12 says 5d deliberately left alone.
+
+2. **One viewport contains two different directions for the same letter.** The green gizmo Y arm points right
+   while the dark-green reference Y axis points up; the red gizmo X arm points into the screen while the
+   dark-red reference X axis points right. That is not D9 and it is not new: `AddAxes` lives in `_boardGroup`,
+   which carries the remap and the orientation, while `CreateWorldAxes` lives in `boardRoot`, which
+   `MainWindow` never transforms (`BoardViewReferenceAxesAreUntransformed_WhileTheGizmoCarriesTheRemap` asserts
+   the source fact, not a tautology). §12.12 already records that a sensor gizmo pointing where the world gizmo
+   points would be lying about the sensor's attitude. What the row must do is say **which of the two it is
+   describing**, which the old row never did.
+
+**The old row was not a description of the picture in either build.** It said "green Y (up), cyan Z (into
+−Z)". Applying the measured board transform to the **pre-5d** gizmo — whose arms were at model +X (red), −Z
+(blue, labelled "Y") and +Y (green, labelled "Z") — gives: red arm into the screen, **blue arm pointing up**,
+**green arm pointing right**. So the old row matched neither the pre-5d drawing nor any screenshot: it stated
+the *world-frame convention* (Y up, Z at −Z) in model coordinates, and in doing so attached green to Y when
+the pre-5d build painted green as Z. That is why it survived four phases of review — it reads as a correct
+description of the convention, which is a different claim from a correct description of the image.
+
+**What this closes and what it does not.** §12.12's three blockers are now closed **on paper**: the `Show grid`
+dispute (Finding 30), the unrecorded control state (Finding 31), and this row. **The gate is still open**,
+because the gate is a pixel comparison and `docs/baseline/pre-phase5.png` still does not exist. What changed is
+that the comparison now has a target worth comparing against: previously a diff against §12.1 would have been
+scored against a description of a convention.
+
+**Still owed before the row can be used as a gate:** the image itself, at a recorded window size, from a build
+that has the `Capture log` checkbox (§12.11 Finding 13).
 ---
 
 ## 13. Session handoff
