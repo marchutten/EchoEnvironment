@@ -1,7 +1,7 @@
-﻿# EchoEnvironment — Migration Plan
+# EchoEnvironment — Migration Plan
 
 **Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `5bc2814` (Phase 5d, §12.12), **28 commits ahead** of `origin/main`; working tree clean apart from untracked `.mcp/` and the new `docs/baseline/pre-phase5e.png`. Phase 5 commits 1–5 are committed; **5e is the next unit of work.** `docs/baseline/pre-phase5-connected.png` exists but predates the capture commit; `pre-phase5.png` (the §12.1 disconnected gate image) is **still missing**, and §12.12 records that §12.1's own description of it now describes the **pre-5d** scene. Solution builds 0 errors / 0 warnings across **five** projects **in Debug**. ⚠️ **Release has still never been verified** (§7.5 closed it for three projects; §10, §11, §12.11 and §12.12 all carry it open — the tooling available here cannot select a build configuration, so `dotnet build EchoEnvironment.slnx -c Release` must be run by hand).
-**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · 4 ✅ code complete, gate PARTIALLY closed (§11) · **5 ⏳ commits 1–5 done (`bce4b00`, `321c7bc`, `95638ec`, `75b0179`, `5bc2814`), 5e not started; the §12.1 visual gate is still open, now against seven commits of which four change pixels — three in the scene, one in the toolbar (§12.12)** · 6–7 pending.
+**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · 4 ✅ code complete, gate PARTIALLY closed (§11) · **5 ⏳ code complete — 5a–5d committed (`bce4b00`, `321c7bc`, `95638ec`, `75b0179`, `5bc2814`), and 5e turns out to have been delivered inside 5a (§12.13); the §12.1 visual gate is STILL OPEN, now against seven commits of which four change pixels — three in the scene, one in the toolbar (§12.12)** · 6–7 pending.
 **Test suite:** **290 tests, 290 passed, 0 failed, 0 skipped** (130 before Phase 3, 181 before Phase 4, 222 before the capture commit, 248 after it, 257 with the captured fixture, 269 after 5a/5b, 280 after 5c).
 **Goal:** split the 755-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
 
@@ -61,7 +61,8 @@ EchoEnvironment/                 → becomes the App (WPF, thin)      net10.0-wi
 EchoEnvironment.Core/            ✅ CREATED in Phase 2               net10.0        ← no WPF, no System.IO.Ports
 EchoEnvironment.Hardware/        ✅ CREATED in Phase 3 (§10)                net10.0-windows   ← owns System.IO.Ports; no UseWPF
 EchoEnvironment.Rendering/       Phase 5                             net10.0-windows
-EchoEnvironment.Tests/           ✅ CREATED in Phase 1               net10.0-windows
+EchoEnvironment.Tests/           ✅ CREATE
+D in Phase 1               net10.0-windows
 Directory.Build.props            ✅ CREATED in Phase 0               (shared props, NO TargetFramework)
 global.json                      ✅ CREATED in Phase 0               (pin SDK — net10.0-windows is a brand-new TFM)
 ```
@@ -451,6 +452,8 @@ Order becomes a declared property of the design, not an accident of insertion se
 
 **5e. Move `WpfMath.cs` into Rendering** (§9.2 deviation 2) and **retarget `WpfConversionIsConfinedToOneType`** at the new assembly. If the guard is not retargeted it keeps inspecting the App assembly, finds no WPF-typed public types there, and passes for the wrong reason.
 
+> **As executed — see §12.13.** Both halves of 5e landed in **5a** (`bce4b00`), not in a separate commit, and the predicted failure mode is wrong: an untouched guard *fails loudly* once `WpfMath` leaves the App assembly, it does not pass for the wrong reason. The file is at `Rendering/WpfMath.cs`, not `Rendering/Math/WpfMath.cs`, because the latter's namespace would shadow `System.Math`. What Phase 5 still owes is §12.8 item 4 (the `ToArray()` copies and the `out int[]` wrapper), which this step never named.
+
 **Gate:** pixel-compare the rendered scene against a pre-refactor screenshot. Visual regressions here are subtle and tests won't catch them.
 
 > **Prerequisite still not satisfied:** there is still no reference screenshot. Phase 2's visual check was a run-and-look (§9.5), which closes Phase 2's gate but produces no baseline image. Capture one **before** Phase 5 starts, not after — after Phase 5 there is nothing left to compare against, and the whole point of this gate is a diff.
@@ -557,7 +560,7 @@ Phase 7  polish
 - [~] ≥ 40 tests, all passing, covering parser edge cases, filter known-pose, orthonormality invariant, `LineFramer`. **193 tests, 193 passing.** Parser ✅, known-pose ✅, orthonormality ✅, architecture invariants ✅ (not originally listed — added in Phase 2, extended in Phases 3 and 4), `LineFramer` ✅ **done in Phase 3 (§10)**, `FrameCoalescer` ✅ **added in Phase 4 (§11)**.
 - [~] App runs with `--sim` and `--replay <file>` — no hardware required. **The two streams now exist** (`SimulatedSensorStream`, `ReplaySensorStream` — Phase 3), **but nothing in the App can select them**: there is no `--sim`, no `--replay`, and `MainWindow` constructs `SerialSensorStream` directly. The seam is built; the composition root is Phase 6c.
 - [~] Pitch/Roll labels verified against a physical tilt, with a regression test. **Regression test exists** (`OrientationAngleMappingTests`, and it is the test that would have failed had the plan's own wrong description of D1 been implemented). **The physical tilt has not been done** — that half is inherently manual and is still the only way to settle which label is wrong in the user's terms. Phase 6a.
-- [ ] Main view and board view use one axis convention. `WorldFrame` now exists as the single source of truth, but `AddAxes` and `CreateWorldAxes` have not yet been rewired to it. Phase 5d.
+- [~] Main view and board view use one axis convention. **Satisfied for the convention, not for the on-screen mapping.** `WorldFrame` is now the single source of truth *and* both gizmos read it: `AddAxes` and `CreateWorldAxes` each loop over `AxisConvention.WorldAxes`, whose directions are `WorldFrame.East/Up/South`, and `ScenePrimitives` contains no colour literal (`AxisConventionIsTheOnlyPlaceThatNamesAnAxisColour`). Done in **5d** (`5bc2814`); see §12.13. **What is still open is the other half of the disagreement:** the two viewports still apply different transforms — `_boardGroup` carries `CreateViewTransform(remapModel: true, …)`'s model remap, the sensor viewport carries a 180° rotation about X — so world axes still land on different screen directions in the two views. §12.12 records that removing the remap is a **geometry** change, not a labelling one, and 5d deliberately did not make it. Finding 6 is the on-screen evidence.
 - [x] Frame rate is a declared UI setting, not a baud-rate side effect. **Done in Phase 4 (§11).** `RenderRateComboBox` in the toolbar offers 15 / 30 / 60 / 120 Hz with 60 Hz as the default, and it drives `DispatcherTimer.Interval` live — the rate can be changed while connected. `Stream_FrameReceived` no longer contains a `Dispatcher.BeginInvoke`. Pinned by `RenderRateIsAUserVisibleSetting_AndFrameReceivedNoLongerMarshalsPerFrame` and `DefaultRenderRateIsThePlannedSixtyHertz`. **Note what is *not* covered:** the choice is visible and enforced, but no measurement shows the app sustaining 60 Hz against real frames (§11.6).
 - [ ] CI builds and tests on every push. Phase 7. Note `.github/copilot-instructions.md` exists but there is no workflow file.
 - [ ] README documents the serial protocol. Phase 7.
@@ -1593,6 +1596,60 @@ Tests: **290 / 290 passed / 0 failed / 0 skipped** (248 before the capture commi
 ### Outstanding, unchanged by these commits
 
 The §12.1 pixel diff has still never been performed. `pre-phase5.png` (disconnected) still does not exist. **Release has still never been verified.** `EchoEnvironment\Math` is still an empty directory awaiting `rmdir`. All commits remain unsigned (`gpg: … No secret key`). Latency at 115200 baud and the D5/D7 fixes remain untested on hardware.
+
+### 12.13 5e was already done — at 5a. Reconciling the plan record
+
+The header of this document said "5e not started" while the tree already contained
+`EchoEnvironment.Rendering/WpfMath.cs`. Both statements were in the file at the same time, which is the
+documentation defect: a reader could not tell whether 5e was owed work or already-delivered work. It is
+resolved from git, not from the documents.
+
+**`git log --oneline -- EchoEnvironment.Rendering/WpfMath.cs` returns exactly one commit: `bce4b00`** — Phase 5a,
+"extract EchoEnvironment.Rendering (static members only)". So the file moved into Rendering **four commits
+before 5e was ever reached**, and no later commit touches it.
+
+`git show bce4b00 -- EchoEnvironment.Tests/ArchitectureInvariantTests.cs` shows the second half of 5e in the
+same commit: the guard already asserts
+
+```csharp
+Assert.Equal("EchoEnvironment.Rendering", typeof(WpfMath).Assembly.GetName().Name);
+```
+
+**§2 Phase 5e's two named deliverables — "move `WpfMath.cs` into Rendering" and "retarget
+`WpfConversionIsConfinedToOneType` at the new assembly" — are therefore both satisfied, at `bce4b00`.** 5e as
+written is not a unit of work that remains.
+
+**The plan's stated reason for the retarget was wrong, and the guard's own doc comment already says so.** 5e
+predicts that leaving the guard alone makes it "keep inspecting the App assembly, find no WPF-typed public
+types there, and pass for the wrong reason." It does not: the old body asserted
+`Contains(typeof(WpfMath), appTypes)`, and `WpfMath` left the App assembly in the very commit that created
+Rendering, so an untouched guard **fails loudly rather than silently**. The retarget was still required, for a
+different reason — the rule the guard was meant to state ("only WpfMath and UI types may expose WPF types")
+cannot survive Phase 5 at all, because Rendering's entire job is exposing WPF types. The narrower rule it now
+enforces is: *no public signature may name Core and WPF in the same breath, except `WpfMath` and UI types.*
+That is falsifiable — `AxisConvention`, `SceneLayers`, `ZoneRenderer` and `BrushCache` all speak WPF only, and
+`AxisLabel` deliberately carries a `Vector3D` rather than Core's `Vec3` precisely so it does not trip the guard.
+
+**One deliberate deviation, recorded rather than hidden.** 5e names the path `Rendering/Math/WpfMath.cs`. The
+file sits at `Rendering/WpfMath.cs`. A namespace following that folder would be `EchoEnvironment.Math`, which
+shadows `System.Math` in every file that imports it. The deviation is stated in `WpfMath.cs`'s own class
+comment. It is a correction to the plan, not an oversight.
+
+**What Phase 5 actually still owes is §12.8 item 4, not §2's 5e text:** the two `ToArray()` copies in
+`RenderFrame` (`frame.Imu.ToArray()`, `frame.Distances.ToArray()`) and the `out int[]` parser wrapper in
+`SensorFrameParser`, whose own doc comment says "kept for one phase and deleted in Phase 5". Verified call-site
+counts for that wrapper: **zero production call sites** — `SerialSensorStream.Port_DataReceived` and
+`ReplaySensorStream.Deliver` both use the `out SensorFrame` overload, and `MainWindow` contains no
+`SensorFrameParser` reference at all — against **29 test call sites** in `SensorFrameParserTests`. Deleting it
+touches 29 tests and nothing else. `SESSION_HANDOFF.md` already restates 5e's scope this way; §2's text was
+never updated to match, which is what made the header and the tree disagree.
+
+**Consequence for §5.** The acceptance criterion "Main view and board view use one axis convention. `WorldFrame`
+now exists as the single source of truth, but `AddAxes` and `CreateWorldAxes` have not yet been rewired to it.
+Phase 5d." is now **satisfied**: both gizmos loop over `AxisConvention.WorldAxes`, whose directions are read
+from `WorldFrame.East/Up/South`, and `ScenePrimitives` contains no colour literal at all
+(`AxisConventionIsTheOnlyPlaceThatNamesAnAxisColour` asserts the absence, the three `WorldFrame.` reads, and
+that **both** gizmos loop — count 2, not "at least 1").
 ---
 
 ## 13. Session handoff
