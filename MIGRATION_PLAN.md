@@ -1730,6 +1730,12 @@ scored against a description of a convention.
 **Still owed before the row can be used as a gate:** the image itself, at a recorded window size, from a build
 that has the `Capture log` checkbox (§12.11 Finding 13).
 
+## 13. Session handoff
+
+For a new session, **read `SESSION_HANDOFF.md` in the repo root first**: it records HEAD, build/test state,
+what each Phase 5 step covers, and — separately — what is **UNVERIFIED** (no commit since 5a has been visually
+confirmed; a crash reported after 5a was never attributed). Keep that file current at each session boundary; it
+is the only durable memory of this migration, because there is no knowledge base in the repo to search.
 ---
 
 ## 14. Phase 5 closure — §12.8 item 4 is now done; the gate is the only thing left
@@ -1783,15 +1789,5 @@ pending". It is not accurate. Verified against the tree: the **6c composition ro
 `TakeDirtyBuckets`, consumed by `ZoneRenderer`). What Phase 6 still lacks is **6b**: no `MainViewModel` type
 anywhere in the solution, `MainWindow` takes a `SensorSource` rather than a view model, and `SetOrientation` is
 still a public method on a `Window` (`MainWindow.xaml.cs:205`). Phase 7 still lacks the `src/` + `tests/`
-relocation and the WPF 3D normals item. The header's phase table row for Phase 5 is corrected above; rows 6
-and 7 need the same treatment in a later pass, and are **not** corrected here because Phase 5's closure is what
-this section is for.
----
-
-## 13. Session handoff
-
-§12.10 is where the work stopped. For a new session, **read `SESSION_HANDOFF.md` in the repo root first**: it
-records HEAD, build/test state, what 5c covers, the two decisions to make before writing any code, and —
-separately — what is **UNVERIFIED** (5a and 5b have never been visually confirmed; a crash reported after 5a
-was never attributed). Keep this file current at each session boundary; it is the only durable memory of this
-migration, because there is no knowledge base in the repo to search.
+relocation and the WPF 3D normals item. **The header's phase-status line and §6's table rows for 5, 6 and 7 are
+all corrected**, so the document no longer claims that Phase 6 and Phase 7 are untouched.
