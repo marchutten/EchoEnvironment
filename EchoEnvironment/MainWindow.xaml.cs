@@ -39,9 +39,23 @@ namespace EchoEnvironment
         private string? _capturePath;
 
         /// <summary>
+        /// Which transport this window was told to use, decided by the composition root (MIGRATION_PLAN 6c)
+        /// and never chosen here. Held as a factory rather than as a stream because the connection lifecycle
+        /// below is create-on-connect / dispose-on-disconnect: one injected instance would be disposed by the
+        /// first Disconnect and the second Connect would meet an ObjectDisposedException.
+        /// </summary>
+        private readonly SensorSource _source;
+
+        /// <summary>
         /// Never opened. Exists only so RefreshPorts asks the transport seam which ports exist,
         /// instead of calling SerialPort directly — which is what lets the App drop its
         /// System.IO.Ports reference entirely.
+        ///
+        /// It stays a SerialSensorStream even when the session is --sim or --replay, and that is deliberate
+        /// rather than an oversight: the port list is a question about the machine, not about the chosen
+        /// source, and asking SimulatedSensorStream would answer it with the single fake name "SIM". The
+        /// toolbar still shows what ports exist so a --sim session can be switched to a real device by
+        /// pressing Connect again.
         /// </summary>
         private readonly SerialSensorStream _portProbe = new();
 
@@ -72,8 +86,18 @@ namespace EchoEnvironment
         private static readonly int[] RenderRateChoices = [15, 30, 60, 120];
         private const int DefaultRenderRateHz = 60;
 
-        public MainWindow()
+        /// <summary>
+        /// Builds the window for one chosen sensor source (MIGRATION_PLAN 6c).
+        ///
+        /// The parameter is a SensorSource and not an ISensorStream on purpose: the window must be able to
+        /// create a stream on every Connect and dispose it on every Disconnect, which is the lifecycle this
+        /// class has had since Phase 3. Injecting a ready-made stream would break the second Connect.
+        /// </summary>
+        public MainWindow(SensorSource source)
         {
+            ArgumentNullException.ThrowIfNull(source);
+            _source = source;
+
             InitializeComponent();
 
             // Both collaborators take XAML-named elements, so neither can exist before
@@ -127,6 +151,26 @@ namespace EchoEnvironment
 
             RefreshPorts();
             Closed += (_, _) => Disconnect();
+
+            // The chosen source is announced rather than left implicit. A --sim or --replay session looks
+            // identical to a serial one until something goes wrong, and the difference is not cosmetic: a
+            // replay writes no capture file, and a simulator needs no device. Saying it in the status line
+            // is what stops "why is there no data?" from becoming "is the port broken?".
+            StatusText.Text = _source.Kind switch
+            {
+                SensorSourceKind.Simulated => "Simulated source: press Connect to start synthetic frames (no hardware)",
+                SensorSourceKind.Replay => $"Replay source: press Connect to replay {_source.ReplayPath}",
+                _ => "Ready",
+            };
+
+            // Raw capture is a property of the serial transport. For --sim and --replay the checkbox is
+            // disabled rather than left clickable, because a control that accepts a request nothing can
+            // honour reports a failure for a mistake the user was never allowed to make.
+            if (!_source.CaptureSupported)
+            {
+                CaptureCheckBox.IsEnabled = false;
+                CaptureCheckBox.IsChecked = false;
+            }
         }
 
         /// <summary>
@@ -262,6 +306,22 @@ namespace EchoEnvironment
                 : selected;
         }
 
+        /// <summary>
+        /// Connect, or disconnect if already connected. The button is one control for both directions and
+        /// the state is `_stream is not null`, exactly as it was before Phase 6c.
+        ///
+        /// WHAT 6c CHANGED: the stream is no longer `new SerialSensorStream()` written here. It comes from
+        /// the composition root's SensorSource, so --sim and --replay produce a window whose Connect button
+        /// starts the source the command line asked for. The lifecycle is unchanged - the source is a
+        /// factory, so every Connect gets a live stream and Disconnect disposes it - which is why a second
+        /// Connect after a Disconnect still works, and why a replay replays again rather than meeting an
+        /// ObjectDisposedException.
+        ///
+        /// WHAT IS UNCHANGED AND DELIBERATELY SO: the port/baud validation, the exception filter, the
+        /// capture armed before Open(), and the Dispatcher.BeginInvoke that queues the capture path behind
+        /// Open()'s own status message. Each of those is a behaviour with a reason recorded in its own
+        /// comment, and 6c is a change to which stream is chosen, not to how a connection is opened.
+        /// </summary>
         private void Connect_Click(object sender, RoutedEventArgs e)
         {
             if (_stream is not null)
@@ -270,13 +330,17 @@ namespace EchoEnvironment
                 return;
             }
 
+            // For a serial session the port and baud come from the toolbar. For --sim and --replay they are
+            // ignored by the stream itself (SimulatedSensorStream paces itself; ReplaySensorStream reads the
+            // log), but the toolbar is still what the user sees, so an empty port box is reported rather than
+            // silently accepted and then ignored.
             if (string.IsNullOrWhiteSpace(PortComboBox.Text) || !int.TryParse(BaudTextBox.Text, out int baud) || baud <= 0)
             {
                 StatusText.Text = "Invalid port or baud rate";
                 return;
             }
 
-            var stream = new SerialSensorStream();
+            ISensorStream stream = _source.CreateStream();
             try
             {
                 stream.FrameReceived += Stream_FrameReceived;
@@ -286,9 +350,9 @@ namespace EchoEnvironment
                 // Armed BEFORE Open(): DataReceived can fire as soon as the port is open, so a capture
                 // attached afterwards would miss the first burst — and the first burst is exactly where
                 // a framing difference between device and replay would show up.
-                if (CaptureCheckBox.IsChecked == true)
+                if (CaptureCheckBox.IsChecked == true && stream is SerialSensorStream serial)
                 {
-                    StartCaptureFor(stream);
+                    StartCaptureFor(serial);
                 }
 
                 stream.Open(PortComboBox.Text, baud);

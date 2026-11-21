@@ -1,9 +1,20 @@
 ﻿<Application x:Class="EchoEnvironment.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:EchoEnvironment"
-             StartupUri="MainWindow.xaml">
+             xmlns:local="clr-namespace:EchoEnvironment">
+    <!--
+      StartupUri was REMOVED at Phase 6c (MIGRATION_PLAN 6c). The plan warns that a composition root in
+      OnStartup conflicts with StartupUri and that one of the two must go; removing StartupUri is the
+      correct choice, because StartupUri constructs the window with a parameterless constructor, which is
+      exactly the thing 6c removes - MainWindow now needs to be told which sensor source to use.
+
+      Leaving StartupUri in place would have produced TWO windows: the one WPF opens from the URI, and the
+      one App.OnStartup shows. That is not a subtle bug and it is not detectable from a build, which is why
+      the plan called this out as "a change to App.xaml, which is XAML and easy to get wrong".
+
+      The window is now constructed in exactly one place: EchoEnvironment/App.xaml.cs, OnStartup.
+    -->
     <Application.Resources>
-         
+
     </Application.Resources>
 </Application>
