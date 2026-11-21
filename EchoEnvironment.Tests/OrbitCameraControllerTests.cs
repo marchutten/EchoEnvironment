@@ -272,7 +272,10 @@ public class OrbitCameraControllerTests
         {
             GeometryModel3D board = MeshFactory.CreateBoardModel();
             var mesh = Assert.IsAssignableFrom<MeshGeometry3D>(board.Geometry!);
-            Assert.Equal(8, mesh.Positions.Count);
+            // Flat shading (Phase 7) gives each of the 12 triangles its own three vertices, so a box is
+            // 36 positions rather than the 8 shared corners it had before. The extents below are unchanged:
+            // duplicating a vertex does not move it. See MeshFactoryNormalsTests for the normal assertions.
+            Assert.Equal(36, mesh.Positions.Count);
 
             double extentX = Extent(mesh, p => p.X);
             double extentY = Extent(mesh, p => p.Y);

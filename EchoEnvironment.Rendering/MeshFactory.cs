@@ -28,10 +28,6 @@ public static class MeshFactory
             new(-h, -h, -h), new(h, -h, -h), new(h, h, -h), new(-h, h, -h),
             new(-h, -h, h), new(h, -h, h), new(h, h, h), new(-h, h, h)
         ];
-        foreach (Point3D point in p)
-        {
-            mesh.Positions.Add(point);
-        }
 
         int[] tri =
         [
@@ -39,9 +35,24 @@ public static class MeshFactory
             0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2,
             1, 2, 6, 1, 6, 5, 0, 4, 7, 0, 7, 3
         ];
-        foreach (int i in tri)
+
+        // Flat shading (MIGRATION_PLAN Phase 7, defect line 509): each triangle gets its own three
+        // vertices and the face normal derived from its own winding, so a box under the DirectionalLight
+        // shades each face by its orientation instead of falling back to WPF's undefined normals. The
+        // winding is byte-for-byte the shared-vertex version above, so which faces are front/back is
+        // unchanged — only the vertex count grows from 8 to 36, because flat faces cannot share corners.
+        for (int t = 0; t < tri.Length; t += 3)
         {
-            mesh.TriangleIndices.Add(i);
+            Point3D a = p[tri[t]], b = p[tri[t + 1]], c = p[tri[t + 2]];
+            Vector3D n = Vector3D.CrossProduct(b - a, c - a);
+            n.Normalize();
+            mesh.Positions.Add(a); mesh.Normals.Add(n);
+            mesh.Positions.Add(b); mesh.Normals.Add(n);
+            mesh.Positions.Add(c); mesh.Normals.Add(n);
+            int first = mesh.Positions.Count - 3;
+            mesh.TriangleIndices.Add(first);
+            mesh.TriangleIndices.Add(first + 1);
+            mesh.TriangleIndices.Add(first + 2);
         }
 
         mesh.Freeze();
@@ -52,9 +63,13 @@ public static class MeshFactory
     {
         MeshGeometry3D unit = CreateCubeMesh(1.0);
         var mesh = new MeshGeometry3D();
-        foreach (Point3D p in unit.Positions)
+        for (int i = 0; i < unit.Positions.Count; i++)
         {
+            Point3D p = unit.Positions[i];
             mesh.Positions.Add(new Point3D(center.X + p.X * sx, center.Y + p.Y * sy, center.Z + p.Z * sz));
+            // The cube's normals are axis-aligned, so an axis-aligned scale leaves their direction
+            // unchanged; copy them straight across rather than re-deriving them.
+            mesh.Normals.Add(unit.Normals[i]);
         }
 
         foreach (int i in unit.TriangleIndices)
@@ -143,10 +158,17 @@ public static class MeshFactory
             for (int j = 0; j <= segments; j++)
             {
                 double theta = 2 * Math.PI * j / segments;
-                mesh.Positions.Add(new Point3D(
+                var point = new Point3D(
                     radius * Math.Sin(phi) * Math.Cos(theta),
                     radius * Math.Cos(phi),
-                    radius * Math.Sin(phi) * Math.Sin(theta)));
+                    radius * Math.Sin(phi) * Math.Sin(theta));
+                mesh.Positions.Add(point);
+                // Smooth shading: a sphere centred at the origin has its surface normal equal to the
+                // unit position vector, so every vertex points radially outward. This is the one shape
+                // here that wants smooth (per-vertex) normals rather than flat (per-face) ones.
+                var normal = (Vector3D)point;
+                normal.Normalize();
+                mesh.Normals.Add(normal);
             }
         }
 
