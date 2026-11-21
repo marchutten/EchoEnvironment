@@ -1,4 +1,4 @@
-﻿using EchoEnvironment.Core;
+using EchoEnvironment.Core;
 
 namespace EchoEnvironment.Hardware;
 
@@ -24,7 +24,7 @@ public interface ISensorStream : IDisposable
     event EventHandler<SensorFrame> FrameReceived;
 
     /// <summary>
-    /// Transport state for the status line: "Connected to COM12", "Disconnected", and so on.
+    /// Transport state for the status line: "Connected to COM14", "Disconnected", and so on.
     /// </summary>
     event EventHandler<string> StatusChanged;
 

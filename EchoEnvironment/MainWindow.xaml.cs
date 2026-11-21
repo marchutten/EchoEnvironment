@@ -169,7 +169,7 @@ namespace EchoEnvironment
             };
 
             // The transport raised these from its own thread. Queueing them through the Dispatcher is what
-            // preserves the order Connect relies on: Open raises "Connected to COM12" asynchronously, so the
+            // preserves the order Connect relies on: Open raises "Connected to COM14" asynchronously, so the
             // capture-path message has to land behind it or it is overwritten before anyone can read it.
             _viewModel.TransportAnnounced += (_, message) => Dispatcher.BeginInvoke(() => StatusText.Text = message);
 

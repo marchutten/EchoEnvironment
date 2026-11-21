@@ -12,6 +12,15 @@
 *.rsuser
 *.DotSettings.user
 
+# Debug launch profiles. Visual Studio writes Properties/launchSettings.json when the project is launched
+# from the IDE; here it recorded "commandLineArgs": "--sim", which is a per-machine debugging convenience
+# and not project state that a build or a test depends on. The leading **/ is load-bearing: a pattern with
+# a separator in its middle is anchored to this file's own directory, so "Properties/launchSettings.json"
+# alone would match only <repo-root>/Properties/ and silently miss EchoEnvironment/Properties/. If a launch
+# profile ever needs to be shared across machines deliberately, un-ignore this path rather than deleting
+# the rule.
+**/Properties/launchSettings.json
+
 # Tests
 TestResults/
 *.trx

@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.IO;
 using EchoEnvironment.Core;
 using EchoEnvironment.Hardware;
@@ -14,6 +14,11 @@ namespace EchoEnvironment.Tests;
 /// 193 frames. It is the artifact MIGRATION_PLAN 3c and 4 have been asking for since Phase 3 - "a
 /// real captured log, and the repo has none". There is one now, so the parity half of that gate is
 /// closed by a test instead of by a promise.
+///
+/// WHY THE FIXTURE IS STILL NAMED COM12. The name records the port the capture was taken on, and the
+/// tee named its own output after the port it had open. The device enumerates as COM14 on this machine
+/// now (MainViewModel.DefaultPort), but renaming the fixture to match would make it claim a provenance
+/// it does not have: the bytes inside were written by a session that was on COM12.
 ///
 /// WHAT THE FILE ACTUALLY IS, measured rather than assumed:
 ///   - 193 lines, every line exactly 73 comma-separated integers, no empty lines, no carriage

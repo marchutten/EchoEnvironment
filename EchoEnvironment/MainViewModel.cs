@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.IO;
 using EchoEnvironment.Core;
 using EchoEnvironment.Hardware;
@@ -63,7 +63,7 @@ public sealed class MainViewModel
     public const int DefaultRenderRateHz = 60;
 
     /// <summary>The port preselected when the list does not say otherwise.</summary>
-    public const string DefaultPort = "COM12";
+    public const string DefaultPort = "COM14";
 
     private const int MaxRejectedLineChars = 80;
 

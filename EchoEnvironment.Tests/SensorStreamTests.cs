@@ -61,7 +61,7 @@ public class SensorStreamTests
     /// <summary>
     /// Only the two implementations that can be opened without hardware. SerialSensorStream is
     /// deliberately excluded: opening a real port in a test is not a seam test, and on this machine
-    /// COM12 is the development sensor — a test that opens it would interfere with a hardware
+    /// COM14 is the development sensor — a test that opens it would interfere with a hardware
     /// session. That half of Phase 3's gate belongs to the hardware session, not to the suite.
     /// </summary>
     public static TheoryData<ISensorStream> OpenableStreams() => new()
@@ -121,7 +121,7 @@ public class SensorStreamTests
 
     // WHAT IS NOT TESTED HERE, and why: SerialSensorStream.Open's success path — the status message
     // it raises, the DataReceived subscription, the framing of real port text — cannot be tested
-    // without opening a real port. On this machine COM12 is the development sensor, so a test that
+    // without opening a real port. On this machine COM14 is the development sensor, so a test that
     // opened the first available port would take the device away from a hardware session. That half
     // of Phase 3's gate ("app connects to real hardware and behaves identically") is discharged by
     // the hardware session itself, not by the suite. Pretending otherwise would be a green test

@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using EchoEnvironment.Core;
 using EchoEnvironment.Hardware;
 using Xunit;
@@ -296,9 +296,9 @@ public class RawTextCaptureTests
     [Fact]
     public void DefaultCapturePath_NamesTheConditionsOfTheCapture()
     {
-        string path = SerialSensorStream.DefaultCapturePath("COM12", 115200);
+        string path = SerialSensorStream.DefaultCapturePath("COM14", 115200);
 
-        Assert.Contains("COM12", path);
+        Assert.Contains("COM14", path);
         Assert.Contains("115200", path);
         Assert.EndsWith(".txt", path, StringComparison.Ordinal);
         Assert.Contains("captures", Path.GetDirectoryName(path) ?? string.Empty);
