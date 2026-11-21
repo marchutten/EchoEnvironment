@@ -14,7 +14,7 @@ marked **UNVERIFIED** is a claim, not a fact.
 | Tests | **343 passed / 0 failed / 0 skipped** |
 | `MainWindow.xaml.cs` | **449 lines** (216 code, 179 comment, 54 blank) — 827 before Phase 5, 633 after it, 449 after 6b. §5's "< 200" is **still not met**. |
 | `MainViewModel.cs` | **439 lines**, new at 6b |
-| Plan of record | `MIGRATION_PLAN.md`, ends at §15 |
+| Plan of record | `MIGRATION_PLAN.md`, ends at §16 |
 
 ## Phase 6 is CODE COMPLETE (6a, 6b, 6c)
 
@@ -99,9 +99,9 @@ Rules that follow, and they are binding for this repo:
 1. **§12.1 pixel comparison — never run.** `docs/baseline/pre-phase5.png` does not exist.
    `pre-phase5-connected.png` (1186 × 748) and `post-phase5d-connected.png` (1192 × 838) cannot be diffed at
    all. Human step, steps below.
-2. **The app has not been run since Phase 3.** §5's "renders identically after every structural phase" has
-   been re-opened since Phase 3 and never re-satisfied. Phase 6b changes no pixels by claim, and that claim
-   has not been looked at either.
+2. **"Renders identically" — half closed.** The app has now been run: `--sim`, Connect clicked, frames rendering,
+   board axes red X / green Y / blue Z (§16). That is the first run since Phase 3 and it rules out "crashes or
+   draws nothing". It does **not** satisfy §5's "identically", which needs a baseline image on both sides.
 3. **6a's physical tilt** — inherently manual, and the only way to settle which label is wrong in the user's
    terms.
 4. **§5's `MainWindow.xaml.cs` < 200 lines** — 449 total / 216 code. Reaching 200 means moving the scene
@@ -112,13 +112,21 @@ Rules that follow, and they are binding for this repo:
 
 **The human step, in order:**
 
-1. Capture `docs/baseline/pre-phase5.png` — disconnected, `COM12` / `115200`, `Show grid` **off**, `Keep map`
-   **off**, `Render` **60 Hz**, at a **recorded window size**, using §12.1's control table (Finding 30).
+1. Capture `docs/baseline/pre-phase5.png` — disconnected, `Show grid` **off**, `Keep map` **off**, `Render`
+   **60 Hz**, at a **recorded window size**, using §12.1's control table (Finding 30). **The port field is
+   machine-dependent and cannot be matched verbatim:** §12.1 says `COM12`, but `RefreshPorts`
+   (`MainViewModel.cs:170-176`) selects `DefaultPort` only if the machine actually has it, otherwise `Ports[0]`.
+   This machine has no `COM12`, so the picker shows `COM1` (§16). Record the port and the window size alongside
+   the image rather than treating `COM12` as a state to reproduce.
 2. Diff it against §12.1 + §12.14. §12.14's Board row is the current expectation; §12.1's old Board row is
-   not. Heed §12.14's two warnings: the board slab reads as a **foreshortened sliver**, and one viewport
-   contains **two directions for the same letter**. Neither is a regression.
+   **confirmed stale by direct observation** (§16: red X / green Y / blue Z matches `AxisConvention.cs:85`'s
+   `Colors.DeepSkyBlue`, not §12.1's "cyan Z (into −Z)"). Heed §12.14's two warnings: the board slab reads as a
+   **foreshortened sliver**, and one viewport contains **two directions for the same letter**. Neither is a
+   regression.
 3. Re-capture the connected pair at **one** window size.
-4. Run the app, and run `--sim`, which is the Phase 6 gate's own wording ("`--sim` renders").
+4. ~~Run the app, and run `--sim`~~ — **done** (§16). What that run did not report is the **status line**: after a
+   sim connect it should read `"Simulating {Pose}, {ZoneCount} zones"` (`SimulatedSensorStream.cs:128`). Read it
+   off the next run; it is the surface 6b moved, so it is the one most worth checking.
 
 ## Outstanding, unchanged
 
@@ -130,8 +138,15 @@ Rules that follow, and they are binding for this repo:
 
 ## UNVERIFIED — do not treat as done
 
-- **No commit since 5a has been visually verified.** 5a, 5b, 5c, 5d all change pixels. 6b claims to change
-  none; that claim has not been checked against a screenshot.
+- **No commit since 5a has been visually verified against a baseline.** 5a, 5b, 5c, 5d all change pixels. 6b claims
+  to change none; that claim has not been checked against a screenshot. The `--sim` run (§16) confirms the app
+  **renders** — frames reach the view, board axes draw red/green/blue — but it is one side of a comparison with no
+  baseline on the other, so it cannot detect a subtle change in *what* is drawn.
+- **The status line after a sim connect was not reported.** `SimulatedSensorStream.Open` announces
+  `"Simulating {Pose}, {ZoneCount} zones"` (`SimulatedSensorStream.cs:128`) via `TransportAnnounced`; before
+  Connect, `MainViewModel.cs:104` sets `"Simulated source: press Connect to start synthetic frames (no hardware)"`.
+  Neither string was observed. That is exactly the surface 6b moved into `MainViewModel`, so it is the surface most
+  worth looking at next run. §12.10 Finding 9 (status clipped at window width) also unchecked.
 - A crash was reported after 5a and never attributed.
 - Capture/replay parity has not been compared frame-by-frame. Expect the documented trailing-frame divergence
   (§12.11 Finding 10).
@@ -139,7 +154,11 @@ Rules that follow, and they are binding for this repo:
 
 ## Next unit of work
 
-**Not code.** The §12.1 gate screenshot and a run of the app, including `--sim`. Five phases of commits change
-pixels and none has ever been looked at.
+**Not code.** The §12.1 gate screenshot. `--sim` has now been run and renders (§16), so the remaining gap is a
+**captured image**, not a launch: five phases of commits change pixels and none has ever been compared against a
+baseline, because no baseline exists.
+
+Then the **manual hardware checklist** — the third third of Phase 6's gate, which `--sim` cannot satisfy — and
+6a's physical tilt.
 
 Then Phase 7: the `src/` + `tests/` relocation, the WPF 3D normals item, and the Release build.
