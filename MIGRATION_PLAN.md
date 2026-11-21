@@ -1,8 +1,8 @@
 # EchoEnvironment — Migration Plan
 
 **Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `8ebfe6d` (§14, Phase 5 closure), **42 commits ahead** of `origin/main` and 0 behind **measured at that commit** — `git_status` is the source, not this line, which drifts with every commit after it. Working tree clean. **Phase 5's code is complete** — §12.8 item 4, the last code obligation, closed by `1f84881` and `8ebfe6d`. `docs/baseline/` holds `pre-phase5-connected.png` (1186 × 748) and `post-phase5d-connected.png` (1192 × 838); `pre-phase5.png` (the §12.1 **disconnected** gate image) is **still missing**, and the two connected captures **cannot be diffed at their current window sizes**. §12.1's Board view row has been re-recorded from a current build (§12.14). Solution builds 0 errors / 0 warnings across **five** projects **in Debug**. ⚠️ **Release has still never been verified** (§7.5 closed it for three projects; §10, §11, §12.11 and §12.12 all carry it open — the tooling available here cannot select a build configuration, so `dotnet build EchoEnvironment.slnx -c Release` must be run by hand; §14 confirms this again and records that `EchoEnvironment.Hardware` and `EchoEnvironment.Rendering` have **no Release output at all**).
-**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · 4 ✅ code complete, gate PARTIALLY closed (§11) · **5 ✅ CODE COMPLETE — 5a–5d committed (`bce4b00`, `321c7bc`, `95638ec`, `75b0179`, `5bc2814`), 5e's named deliverables delivered inside 5a (§12.13), and §12.8 item 4 — the last code obligation — closed by `1f84881` and `8ebfe6d` (§14). The §12.1 visual gate is STILL OPEN and is now the ONLY thing Phase 5 owes: it is a human pixel comparison and no automated test can substitute for it (§12.12, §14)** · 6–7 pending.
-**Test suite:** **340 tests, 340 passed, 0 failed, 0 skipped** (130 before Phase 3, 181 before Phase 4, 222 before the capture commit, 248 after it, 257 with the captured fixture, 269 after 5a/5b, 280 after 5c, 340 after §14).
+**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · 4 ✅ code complete, gate PARTIALLY closed (§11) · **5 ✅ CODE COMPLETE — 5a–5d committed (`bce4b00`, `321c7bc`, `95638ec`, `75b0179`, `5bc2814`), 5e's named deliverables delivered inside 5a (§12.13), and §12.8 item 4 — the last code obligation — closed by `1f84881` and `8ebfe6d` (§14). The §12.1 visual gate is STILL OPEN and is now the ONLY thing Phase 5 owes: it is a human pixel comparison and no automated test can substitute for it (§12.12, §14)** · **6 ⏳ PARTLY DELIVERED — 6a's D1 label fix committed (`406c2bf`), 6c's composition root delivered (`572da12`, `StartupUri` removed from `App.xaml`), 6b's `MainViewModel` NOT STARTED (no such type exists; `MainWindow` takes a `SensorSource`; `SetOrientation` is still public on a `Window`); 6a's physical tilt never done** · **7 ⏳ PARTLY DELIVERED — CI (`6152525`), README (`a65203f`) and D4's dirty-bucket rebuild (`bf85d0f`) landed; the `src/` + `tests/` relocation and the WPF 3D normals item have not.** ⚠️ 6 and 7 were recorded as "pending" for the whole of Phase 5; §14 records the correction and §6's table rows for 6 and 7 still need it.
+**Test suite:** **340 tests, 340 passed, 0 failed, 0 skipped** (130 before Phase 3, 181 before Phase 4, 222 before the capture commit, 248 after it, 257 with the captured fixture, 269 after 5a/5b, 280 after 5c, 290 at §12.12, 340 at §14). ⚠️ The 290 entry was **stale from the moment it was written**: the Phase 6a, 6c, CI, README and D4 commits landed after it without the count being updated, so the header under-reported the suite for five commits. See §14.
 **Goal:** split the 755-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
 
 **Governing rule:** *seam first, then move.* Every phase must leave the app runnable and the build green. No phase may mix a behavior change with a structural move.
@@ -580,8 +580,8 @@ Phase 7  polish
 | 3 Hardware abstraction | 3 h | 10.5 h | ✅ **CODE COMPLETE** (§10) — gate partially closed: build + 181 tests green, hardware parity and log capture still open |
 | 4 Coalescing stage | 2 h | 12.5 h | ✅ **CODE COMPLETE** (§11) — gate **partially** closed: build + 193 tests green, drop counter done; the max-baud latency measurement and a run of the app are still open |
 | 5 Rendering extraction | 3 h | 15.5 h | ✅ **CODE COMPLETE** (§12, §14) — 5a–5e delivered; §12.8 item 4 closed by `1f84881` + `8ebfe6d`. **Gate OPEN**: the §12.1 pixel comparison has never been run, and `docs/baseline/pre-phase5.png` does not exist |
-| 6 ViewModel + D1 fix | 2 h | 17.5 h | pending |
-| 7 Polish | 3–4 h | ~20 h | pending |
+| 6 ViewModel + D1 fix | 2 h | 17.5 h | ⏳ **PARTLY DELIVERED** — 6a's D1 label fix committed (`406c2bf`), 6c's composition root delivered (`572da12`, `StartupUri` removed from `App.xaml`), `--sim` / `--replay` handled (`AppLaunchOptions.cs`). **6b not started**: no `MainViewModel` type exists, `MainWindow` takes a `SensorSource`, `SetOrientation` is still public on a `Window`. 6a's physical tilt never done. Gate open |
+| 7 Polish | 3–4 h | ~20 h | ⏳ **PARTLY DELIVERED** — CI landed (`6152525`, `.github/workflows/build-and-test.yml`), README landed (`a65203f`), D4 dirty-bucket rebuild landed (`bf85d0f`, `WorldMap.TakeDirtyBuckets` consumed by `ZoneRenderer`). Not done: `src/` + `tests/` relocation, WPF 3D normals |
 
 **Minimum viable value is delivered at the end of Phase 2 (~7.5 h) — and Phase 2 is finished, gate closed:** testable domain logic, no WPF dependency, a build that still works, 130 passing tests, and a confirmed-working app. If nothing else is done, the migration has already paid for itself.
 
@@ -1754,9 +1754,11 @@ can any longer prove that two signatures agreed, so
 `TheSingleOverload_AcceptsAndRejectsExactlyTheDocumentedShapes`, which asserts the same accept/reject
 shape table directly.
 
-**Test count moved 340 → 340.** Three guards were added in `FrameCoalescerTests` and one comparison
-test was replaced by one shape test, so the total is unchanged. The suite is **340 passed / 0 failed /
-0 skipped**, Debug, five projects, 0 errors / 0 warnings.
+**Test suite: 340 passed / 0 failed / 0 skipped**, Debug, five projects, 0 errors / 0 warnings. This session
+added three guards in `FrameCoalescerTests` and replaced one comparison test with one shape test, so its own
+net effect on the count is small. ⚠️ **The header's "290 tests" was stale before this session began**: it was
+last updated "after 5c", and the Phase 6a, 6c, CI, README and D4 commits that landed since then added tests
+without the header being updated. The header now records 340, which is the measured number, not a derived one.
 
 **One test failed on the way and the failure was the test's, not the app's.**
 `TheStatusLineLoopAgreesWithTheLinqItReplaced([])` threw `InvalidOperationException : Sequence contains
