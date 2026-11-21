@@ -1,8 +1,8 @@
 # EchoEnvironment — Migration Plan
 
-**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `5bc2814` (Phase 5d, §12.12), **28 commits ahead** of `origin/main`; working tree clean apart from untracked `.mcp/` and the new `docs/baseline/pre-phase5e.png`. Phase 5 commits 1–5 are committed; **5e is the next unit of work.** `docs/baseline/pre-phase5-connected.png` exists but predates the capture commit; `pre-phase5.png` (the §12.1 disconnected gate image) is **still missing**, and §12.12 records that §12.1's own description of it now describes the **pre-5d** scene. Solution builds 0 errors / 0 warnings across **five** projects **in Debug**. ⚠️ **Release has still never been verified** (§7.5 closed it for three projects; §10, §11, §12.11 and §12.12 all carry it open — the tooling available here cannot select a build configuration, so `dotnet build EchoEnvironment.slnx -c Release` must be run by hand).
-**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · 4 ✅ code complete, gate PARTIALLY closed (§11) · **5 ⏳ code complete — 5a–5d committed (`bce4b00`, `321c7bc`, `95638ec`, `75b0179`, `5bc2814`), and 5e turns out to have been delivered inside 5a (§12.13); the §12.1 visual gate is STILL OPEN, now against seven commits of which four change pixels — three in the scene, one in the toolbar (§12.12)** · 6–7 pending.
-**Test suite:** **290 tests, 290 passed, 0 failed, 0 skipped** (130 before Phase 3, 181 before Phase 4, 222 before the capture commit, 248 after it, 257 with the captured fixture, 269 after 5a/5b, 280 after 5c).
+**Baseline:** `pre-refactor` @ `f3475a1` (tagged, "Code state before refactor" — the last commit before Phase 0). **Current head:** `8ebfe6d` (§14, Phase 5 closure), **42 commits ahead** of `origin/main` and 0 behind **measured at that commit** — `git_status` is the source, not this line, which drifts with every commit after it. Working tree clean. **Phase 5's code is complete** — §12.8 item 4, the last code obligation, closed by `1f84881` and `8ebfe6d`. `docs/baseline/` holds `pre-phase5-connected.png` (1186 × 748) and `post-phase5d-connected.png` (1192 × 838); `pre-phase5.png` (the §12.1 **disconnected** gate image) is **still missing**, and the two connected captures **cannot be diffed at their current window sizes**. §12.1's Board view row has been re-recorded from a current build (§12.14). Solution builds 0 errors / 0 warnings across **five** projects **in Debug**. ⚠️ **Release has still never been verified** (§7.5 closed it for three projects; §10, §11, §12.11 and §12.12 all carry it open — the tooling available here cannot select a build configuration, so `dotnet build EchoEnvironment.slnx -c Release` must be run by hand; §14 confirms this again and records that `EchoEnvironment.Hardware` and `EchoEnvironment.Rendering` have **no Release output at all**).
+**Phase status:** 0 ✅ · 1 ✅ gate passed (`8e19f97`) · 2 ✅ **gate fully closed** — automated (`295d5bf`) and visual (§9.5) · ✅ step 2d now DONE, in Phase 3 (§9.7 closed by §10.2) · 3 ✅ code complete, gate PARTIALLY closed (§10) · 4 ✅ code complete, gate PARTIALLY closed (§11) · **5 ✅ CODE COMPLETE — 5a–5d committed (`bce4b00`, `321c7bc`, `95638ec`, `75b0179`, `5bc2814`), 5e's named deliverables delivered inside 5a (§12.13), and §12.8 item 4 — the last code obligation — closed by `1f84881` and `8ebfe6d` (§14). The §12.1 visual gate is STILL OPEN and is now the ONLY thing Phase 5 owes: it is a human pixel comparison and no automated test can substitute for it (§12.12, §14)** · 6–7 pending.
+**Test suite:** **340 tests, 340 passed, 0 failed, 0 skipped** (130 before Phase 3, 181 before Phase 4, 222 before the capture commit, 248 after it, 257 with the captured fixture, 269 after 5a/5b, 280 after 5c, 340 after §14).
 **Goal:** split the 755-line `MainWindow` into a testable core + hardware abstraction + rendering layer, **without** a rewrite and **without** a big-bang refactor.
 
 **Governing rule:** *seam first, then move.* Every phase must leave the app runnable and the build green. No phase may mix a behavior change with a structural move.
@@ -579,7 +579,7 @@ Phase 7  polish
 | 2 Core extraction | 3–4 h | 7.5 h | ✅ DONE, **gate fully closed** (`8d933b4`; automated `295d5bf`, visual §9.5) — ⚠ 2d deferred to Phase 3 |
 | 3 Hardware abstraction | 3 h | 10.5 h | ✅ **CODE COMPLETE** (§10) — gate partially closed: build + 181 tests green, hardware parity and log capture still open |
 | 4 Coalescing stage | 2 h | 12.5 h | ✅ **CODE COMPLETE** (§11) — gate **partially** closed: build + 193 tests green, drop counter done; the max-baud latency measurement and a run of the app are still open |
-| 5 Rendering extraction | 3 h | 15.5 h | pending |
+| 5 Rendering extraction | 3 h | 15.5 h | ✅ **CODE COMPLETE** (§12, §14) — 5a–5e delivered; §12.8 item 4 closed by `1f84881` + `8ebfe6d`. **Gate OPEN**: the §12.1 pixel comparison has never been run, and `docs/baseline/pre-phase5.png` does not exist |
 | 6 ViewModel + D1 fix | 2 h | 17.5 h | pending |
 | 7 Polish | 3–4 h | ~20 h | pending |
 
@@ -1111,12 +1111,12 @@ Splitting a move is not the same as splitting a behaviour change, so §3 rule 2 
 1. ⚠️ **The pixel comparison has not been done.** §12.1 is the baseline; the comparison is a human step. Until it happens, Phase 5's gate stays open and commit 1 is *unverified visually* — the strongest claim available from the automated evidence is "the build is clean and the diff is a relocation."
 2. ⚠️ **The app has not been run since this change.** §11.8 item 1 was closed by the user's run *before* Phase 5; that run predates commit 1, so the obligation reopens immediately.
 3. ⚠️ **Release build still unverified** — now for five projects and three phases of changes. §11.8 item 2, carried from §10.
-4. ⚠️ **`ToArray()` copies are still in `RenderFrame`,** and §10.2's "there is now something to delete in Phase 5" — the `out int[]` wrapper — **has not been deleted.** Both are Phase 5 work that commit 1 did not reach.
+4. ✅ **Closed by §14.** The `ToArray()` copies are gone (`1f84881`: both consumers take `ReadOnlySpan<int>`, `RenderFrame` reads the frame's own storage), and the `out int[]` wrapper is deleted (`8ebfe6d`). This was the only Phase 5 obligation in this list that was a source change, and it is the last one.
 5. ⚠️ **`MainWindow`'s command handlers are still covered by no test.** Partly narrowed by 12.9: the render path it used to own (`UpdateFrame`, `UpdateHeatmap`, `EnsureZoneModels`, `AddToMap`, `RenderMapIfDue`) is now covered by `ZoneRendererTests`, and the camera arithmetic by `MainWindowNoLongerOwnsCameraOrZoneState`. Still uncovered: `Connect_Click`, `Disconnect`, `RefreshPorts`, the `DispatcherTimer`, and `RenderFrame`'s status-line formatting. §10.7 / §11.6 otherwise unchanged.
 6. ⚠️ **D5 and D7 remain unfixed**, still owed as their own commits (§3 rule 2).
 7. ⚠️ **Latency at 115200 baud unmeasured** (§11.8 item 3), **no real serial log** for the `ReplaySensorStream` parity check (§11.8 item 4), **firmware 25/73 confirmation** never done, **physical tilt** never done.
-8. ⚠️ **`EchoEnvironment\Math\` still exists and is empty** — manual `rmdir`, invisible to git and to solution-file listings (§9.8).
-9. **`MainWindow.xaml.cs` is 389 lines** (595 after 12.2's commit 1, 827 before Phase 5), not < 200. Phase 6b.
+8. ✅ **`EchoEnvironment\Math\` is gone.** Closed by the manual `rmdir` §9.8 asked for. Verified by direct listing, not inferred from git — which is the only way this item could be closed at all, since git never saw the directory: a listing of `EchoEnvironment` returns nine entries, all files, no subdirectories, and `EchoEnvironment/Math` reports "Directory not found".
+9. **`MainWindow.xaml.cs` is 633 lines** (827 before Phase 5, 595 after 12.2's commit 1, 511 at the §12.12 handoff, 633 measured at §14), not < 200. Phase 6b. ⚠️ **The number has moved in the wrong direction across Phase 5 and the movement is unattributed**: the file grew during a phase whose goal is to thin it, and no test accounts for the growth. The count is a measurement of the file, not evidence of a regression.
 10. **`TreatWarningsAsErrors` still has not bitten at Phase 5.** §7.3 predicted it would; five projects built clean, 0 warnings, including the new one. The prediction remains untested rather than disproved — it may still bite when XAML is touched in 5c.
 
 ---
@@ -1729,6 +1729,61 @@ scored against a description of a convention.
 
 **Still owed before the row can be used as a gate:** the image itself, at a recorded window size, from a build
 that has the `Capture log` checkbox (§12.11 Finding 13).
+
+---
+
+## 14. Phase 5 closure — §12.8 item 4 is now done; the gate is the only thing left
+
+Two commits close the last code obligation Phase 5 carried.
+
+**`1f84881` — the `ToArray()` copies.** `OrientationFilter.Update` and `ZoneRenderer.UpdateFrame`
+(now `UpdateHeatmap` too) take `ReadOnlySpan<int>`. `RenderFrame` reads `frame.Imu.Span` and
+`frame.Distances.Span` in place; the status line's `distances.Count(...)` / `distances.Max()` became
+one loop, because a span is not `IEnumerable` — and the LINQ pair allocated an enumerator plus a
+closure over two window constants and walked the array twice. No index, threshold, clamp or ordering
+changed in either method.
+
+**`8ebfe6d` — the `out int[]` wrapper.** `SensorFrameParser.TryParse(string, out int[], out int[]?)`
+is deleted, exactly as its own comment promised. The call-site count §12.13 predicted was confirmed
+before deleting: **zero production call sites**, **28 in `SensorFrameParserTests`**. Those 28 keep
+their original assertions — every one of them is about `TryParseValues`, which did not move and did
+not change — and now reach it through a private test-side adapter, `TryParseLegacy`. The one thing
+that genuinely stopped being assertable is stated rather than hidden: with a single signature nothing
+can any longer prove that two signatures agreed, so
+`SensorFrameOverload_AcceptsAndRejectsExactlyWhatTheArrayOverloadDoes` is replaced by
+`TheSingleOverload_AcceptsAndRejectsExactlyTheDocumentedShapes`, which asserts the same accept/reject
+shape table directly.
+
+**Test count moved 340 → 340.** Three guards were added in `FrameCoalescerTests` and one comparison
+test was replaced by one shape test, so the total is unchanged. The suite is **340 passed / 0 failed /
+0 skipped**, Debug, five projects, 0 errors / 0 warnings.
+
+**One test failed on the way and the failure was the test's, not the app's.**
+`TheStatusLineLoopAgreesWithTheLinqItReplaced([])` threw `InvalidOperationException : Sequence contains
+no elements` from `distances.Max()`. The empty case was removed rather than special-cased: LINQ throws
+on an empty sequence while the loop leaves `maxMm` at `int.MinValue`, so the two sides of the
+comparison cannot both be evaluated, and the input is unreachable anyway —
+`IllegalValueCounts_AreRejected` pins that every token count except 16, 25, 64 and 73 is rejected, and
+`SensorFrameOverload_AcceptsAndRejectsExactlyWhatTheArrayOverloadDoes` pinned `frame.ZoneCount` to
+`distances.Length`. A comment in that test initially cited a test name that does not exist in the
+suite; it was corrected to name the two real ones.
+
+**What Phase 5 now owes is not code.** §12.8 items 1, 2 and 3 are still open and none of them is a source
+change: the pixel comparison, a run of the app, `dotnet build -c Release`. Item 8 — the empty
+`EchoEnvironment\Math\` directory — is **closed**, verified by direct listing rather than by git, which never
+saw the directory. Item 4, the only code obligation in the list, is closed by the two commits above.
+
+**A correction to this document's own header, found while writing this section.** The header said "6–7
+pending". It is not accurate. Verified against the tree: the **6c composition root exists**
+(`App.xaml.cs` `OnStartup`, `new MainWindow(source!)`), `StartupUri` was **removed** from `App.xaml` at 6c,
+`--sim` / `--replay` are handled (`AppLaunchOptions.cs`), the **Phase 7 CI workflow exists**
+(`.github/workflows/build-and-test.yml`), and **D4's dirty-bucket rebuild exists** (`WorldMap._dirtyBuckets` /
+`TakeDirtyBuckets`, consumed by `ZoneRenderer`). What Phase 6 still lacks is **6b**: no `MainViewModel` type
+anywhere in the solution, `MainWindow` takes a `SensorSource` rather than a view model, and `SetOrientation` is
+still a public method on a `Window` (`MainWindow.xaml.cs:205`). Phase 7 still lacks the `src/` + `tests/`
+relocation and the WPF 3D normals item. The header's phase table row for Phase 5 is corrected above; rows 6
+and 7 need the same treatment in a later pass, and are **not** corrected here because Phase 5's closure is what
+this section is for.
 ---
 
 ## 13. Session handoff
