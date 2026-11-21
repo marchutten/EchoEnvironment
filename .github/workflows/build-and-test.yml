@@ -1,0 +1,75 @@
+﻿# CI for MIGRATION_PLAN §7 ("GitHub Actions: windows-latest, dotnet build + dotnet test on
+# push/PR"), which §2 Phase 7 calls the highest-value item in its list: 302 tests exist and,
+# until this file, nothing ran them automatically. A guard nobody executes is not protection.
+#
+# WHY windows-latest IS NOT A PREFERENCE. Four of the five projects target net10.0-windows and two
+# set UseWPF (the App and Rendering). WPF cannot be built or run on Linux or macOS, so a
+# ubuntu-latest job would fail on the App project rather than on anything the commit changed. The
+# one genuinely portable project is EchoEnvironment.Core, which is plain net10.0 precisely so that
+# its "no WPF" guarantee is testable headlessly - but its tests live in the same test project as the
+# WPF ones, so the whole suite has to run on Windows.
+#
+# THE RELEASE BUILD. `dotnet build EchoEnvironment.slnx -c Release` has been listed as an open
+# obligation since §7.5 and carried open through §10, §11, §11.8 item 2, §12.8 item 3 and §12.12 -
+# not because it fails, but because the IDE tooling available during the migration cannot select a
+# build configuration, so Release has never been observed. Building AND testing in Release here is
+# the first place that clause is actually executed. It is also the configuration a release is shipped
+# in, which is the reason the obligation existed.
+#
+# TreatWarningsAsErrors is set in Directory.Build.props for every project, so a warning fails the
+# build here without this workflow adding any flag. §7.3 predicted it would eventually bite; if it
+# does, it will bite here first.
+
+name: build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A superseded push to the same branch cancels the run it replaced, so a burst of migration commits
+# does not queue six builds of the same tree.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # global.json pins SDK 11.0.100 with rollForward: latestFeature, which accepts any 11.0.1xx.
+      # 11.0.x is therefore the range to install: pinning 11.0.100 exactly would fail the job if the
+      # runner ships a newer feature band, which is the case global.json explicitly permits.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+
+      - name: Show the SDK that global.json accepted
+        run: dotnet --version
+
+      - name: Restore
+        run: dotnet restore EchoEnvironment.slnx
+
+      - name: Build (Release)
+        run: dotnet build EchoEnvironment.slnx -c Release --no-restore
+
+      - name: Test (Release)
+        run: >
+          dotnet test EchoEnvironment.Tests/EchoEnvironment.Tests.csproj
+          -c Release --no-build
+          --logger "trx;LogFileName=tests.trx"
+          --results-directory TestResults
+
+      # The migration's gates are counted in tests, so a CI run that reports a number is worth more
+      # than one that only reports green: §9.10's evidence rule is "verify by assembly + test count",
+      # and a silently-skipped discovery is exactly what a count exposes.
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.sha }}
+          path: TestResults/
+          retention-days: 14
