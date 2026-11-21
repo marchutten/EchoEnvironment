@@ -255,26 +255,33 @@ public class OrientationAngleMappingTests
     /// <summary>
     /// THE GUARD THAT MAKES 6a FALSIFIABLE AGAINST THE PRODUCTION FILE.
     ///
-    /// Every other test in this file mirrors the three expressions as private copies. That is a
-    /// deliberate design — the tests cannot instantiate a Window — but it has a hole: a test that
-    /// reproduces the production expressions proves the expressions are self-consistent, not that the
-    /// app contains them. If MainWindow's format string were reverted to `Pitch: {roll}`, every test in
-    /// this file would still pass.
+    /// Every other test in this file mirrors the three expressions as private copies. That is a deliberate
+    /// design — the tests cannot instantiate a Window — but it has a hole: a test that reproduces the
+    /// production expressions proves the expressions are self-consistent, not that the app contains them. If
+    /// the format string were reverted to `Pitch: {roll}`, every test in this file would still pass.
     ///
-    /// So this test reads the format string out of MainWindow.xaml.cs and asserts the pairing directly.
-    /// It is the only test in the suite that can fail if 6a is undone.
+    /// So this test reads the format string out of the file that produces it and asserts the pairing
+    /// directly. It is the only test in the suite that can fail if 6a is undone.
     ///
-    /// WHY IT IS A SOURCE-TEXT ASSERTION AND WHAT THAT COSTS. MainWindow cannot be constructed from a
-    /// test (StaRunner exists for WPF objects, but a Window needs a Dispatcher and a real application).
-    /// Reading the file is the same technique ArchitectureInvariantTests, FrameCoalescerTests and
-    /// OrbitCameraControllerTests already use for the same reason. It is brittle to reformatting and it
-    /// is not a substitute for the physical assertions above; it is a tripwire on the one line 6a
-    /// changed.
+    /// SINCE PHASE 6b THAT FILE IS MainViewModel.cs, not MainWindow.xaml.cs: §2 assigns the orientation
+    /// readout to the view model, and it also requires that "SetOrientation stops being a public method on a
+    /// Window", which is why the window's remaining SetOrientation is private and holds only the matrix
+    /// conversion. The pairing asserted here is the same one 6a established; only the file it lives in moved.
+    /// Asserting the D1 pairing ABSENT from the window as well is what stops the readout being reinstated in
+    /// both places.
+    ///
+    /// WHY IT IS A SOURCE-TEXT ASSERTION AND WHAT THAT COSTS. Neither MainViewModel nor MainWindow can be
+    /// constructed from a test (StaRunner exists for WPF objects, but a Window needs a Dispatcher and a real
+    /// application, and MainViewModel needs a live transport to do anything interesting). Reading the file is
+    /// the same technique ArchitectureInvariantTests, FrameCoalescerTests and OrbitCameraControllerTests
+    /// already use for the same reason. It is brittle to reformatting and it is not a substitute for the
+    /// physical assertions above; it is a tripwire on the one line 6a changed.
     /// </summary>
     [Fact]
     public void MainWindowFormatStringPairsEachLabelWithTheVariableOfTheSameName()
     {
-        string appSource = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "EchoEnvironment", "MainWindow.xaml.cs"));
+        string appSource = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "EchoEnvironment", "MainViewModel.cs"));
+        string windowSource = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "EchoEnvironment", "MainWindow.xaml.cs"));
 
         // The current pairing: Pitch <- pitch, Roll <- roll.
         Assert.Contains(@"Pitch:   {pitch,6:0.0}°", appSource, StringComparison.Ordinal);
@@ -285,22 +292,34 @@ public class OrientationAngleMappingTests
         // "a test that asserts nothing is mistaken for protection" entry exists to prevent.
         Assert.DoesNotContain(@"Pitch:   {roll,6:0.0}°", appSource, StringComparison.Ordinal);
         Assert.DoesNotContain(@"Roll:    {pitch,6:0.0}°", appSource, StringComparison.Ordinal);
+
+        // And the readout exists in exactly one file.
+        Assert.DoesNotContain("Heading: {", windowSource, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// The expressions themselves are unchanged by 6a, and that is a claim worth pinning: a "label fix"
-    /// that quietly altered asin(-M32) or atan2(M12, M22) would be a measurement change wearing a
-    /// correction's clothes. Asserted against the production file so the arithmetic is checked, not
-    /// remembered.
+    /// The expressions themselves are unchanged by 6a, and that is a claim worth pinning: a "label fix" that
+    /// quietly altered asin(-M32) or atan2(M12, M22) would be a measurement change wearing a correction's
+    /// clothes. Asserted against the production file so the arithmetic is checked, not remembered.
+    ///
+    /// SINCE PHASE 6b THE PRODUCTION FILE IS MainViewModel.cs. The readout moved with the status text, per
+    /// §2's list of what 6b owns ("orientation readout"). MainWindow now holds only the matrix conversion.
+    /// The three expressions are asserted to be absent from the window and present in the view model, so a
+    /// move that duplicated them into both files would fail here rather than pass in both places.
     /// </summary>
     [Fact]
     public void TheAngleExpressionsThemselvesAreUnchangedByTheLabelFix()
     {
-        string appSource = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "EchoEnvironment", "MainWindow.xaml.cs"));
+        string readoutSource = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "EchoEnvironment", "MainViewModel.cs"));
+        string windowSource = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "EchoEnvironment", "MainWindow.xaml.cs"));
 
-        Assert.Contains("double pitch = Math.Asin(Math.Clamp(-rotation.M32, -1, 1)) * 180.0 / Math.PI;", appSource, StringComparison.Ordinal);
-        Assert.Contains("double roll = Math.Atan2(rotation.M12, rotation.M22) * 180.0 / Math.PI;", appSource, StringComparison.Ordinal);
-        Assert.Contains("double heading = Math.Atan2(-rotation.M31, rotation.M33) * 180.0 / Math.PI;", appSource, StringComparison.Ordinal);
+        Assert.Contains("double pitch = Math.Asin(Math.Clamp(-rotation.M32, -1, 1)) * 180.0 / Math.PI;", readoutSource, StringComparison.Ordinal);
+        Assert.Contains("double roll = Math.Atan2(rotation.M12, rotation.M22) * 180.0 / Math.PI;", readoutSource, StringComparison.Ordinal);
+        Assert.Contains("double heading = Math.Atan2(-rotation.M31, rotation.M33) * 180.0 / Math.PI;", readoutSource, StringComparison.Ordinal);
+
+        // One copy. The window converts the matrix and does not decompose it into angles.
+        Assert.DoesNotContain("Math.Asin(", windowSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("atan2(M12", windowSource, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

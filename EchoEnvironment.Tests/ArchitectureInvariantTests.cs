@@ -451,6 +451,90 @@ public class ArchitectureInvariantTests
     }
 
     /// <summary>
+    /// PHASE 6b'S OWN GUARD. MainViewModel is the type 6b introduces, and the whole reason it can sit in the
+    /// App assembly next to WpfMath is that it speaks Core and Hardware but never WPF. That is not incidental
+    /// to the design - it is what WpfConversionIsConfinedToOneType requires of any public type in this
+    /// assembly other than WpfMath, Window and Application.
+    ///
+    /// WHY THIS IS ASSERTED DIRECTLY RATHER THAN LEFT TO THAT GUARD. WpfConversionIsConfinedToOneType skips a
+    /// type that fails either half of its test: a type speaking only Core is "domain code" and is passed. So
+    /// if MainViewModel acquired a Dispatcher field, an ICommand property or a DispatcherTimer, the confined
+    /// guard would fail with a message about conversion points - a message that reads as if the architecture
+    /// broke, when what happened is that a view model reached for the one kind of type it may not use. This
+    /// guard names the actual rule and the actual reason: a view model that can marshal its own property
+    /// changes is a view model that owns a UI thread, which is the boundary 6b exists to draw.
+    ///
+    /// THE POSITIVE HALF IS NOT DECORATION. Asserting HasCoreSignature is what stops this test passing on a
+    /// type that had been emptied out. MainViewModel must genuinely hold the orientation (Mat3) and the frame
+    /// (SensorFrame); if those moved away, the readout would have moved away with them.
+    /// </summary>
+    [Fact]
+    public void MainViewModelIsTheAppState_AndSpeaksNoWpfAtAll()
+    {
+        Assert.Equal("EchoEnvironment", typeof(MainViewModel).Assembly.GetName().Name);
+
+        Assert.True(HasCoreSignature(typeof(MainViewModel)),
+            "MainViewModel is expected to expose EchoEnvironment.Core types; it owns the orientation readout "
+            + "and the status line, both of which are computed from Mat3 and SensorFrame.");
+
+        Assert.False(HasWpfSignature(typeof(MainViewModel)),
+            "MainViewModel names a WPF type in its public surface. It cannot: WpfConversionIsConfinedToOneType "
+            + "permits only WpfMath, Window and Application to name Core and WPF together. ICommand lives in "
+            + "PresentationCore and Dispatcher/DispatcherTimer in PresentationFramework, so the commands stay "
+            + "ordinary methods wired by Click= handlers and the cross-thread status stays an event the window "
+            + "queues through its own Dispatcher.");
+    }
+
+    /// <summary>
+    /// PHASE 6b: the connection and the status line are the view model's, and this is the name check that
+    /// keeps them there. Same shape as MainWindowNoLongerOwnsCameraOrZoneState, for the same reason - a count
+    /// would pass while a field crept back under a new name and the behaviour moved with it.
+    ///
+    /// These five are the state that made MainWindow a 633-line file that was simultaneously a view, a
+    /// transport client and a status-line formatter. `_portProbe` is the one that §10.7 recorded as "a
+    /// placeholder for Phase 6c's composition root and should be replaced there": it moved to the view model
+    /// rather than being replaced by an injected port list, because the port list is a question about the
+    /// machine and the seam that answers it is Hardware's. That is recorded, not quietly dropped.
+    /// </summary>
+    [Fact]
+    public void MainWindowNoLongerOwnsTheConnectionOrTheStatusLine()
+    {
+        string[] movedToViewModel =
+        [
+            "_stream", "_capturePath", "_portProbe", "_source", "_frames", "_renderRate", "_keepMap",
+        ];
+
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+
+        foreach (string name in movedToViewModel)
+        {
+            FieldInfo? field = typeof(MainWindow).GetField(name, flags);
+            Assert.True(field is null,
+                $"MainWindow.{name} is back. It moved to MainViewModel at Phase 6b; restoring it re-couples "
+                + "the transport client and the status-line formatter to the window that draws them.");
+        }
+
+        Assert.NotNull(typeof(MainWindow).GetField("_viewModel", flags));
+
+        // And the view model must actually hold them, so the assertions above cannot pass by deleting the
+        // state along with the thing that was supposed to receive it.
+        foreach (string name in new[] { "_stream", "_capturePath", "_portProbe", "_source", "_renderedFrames", "_renderRate", "_keepMap" })
+        {
+            Assert.NotNull(typeof(MainViewModel).GetField(name, flags));
+        }
+
+        // SetOrientation is no longer public on a Window (§2: "SetOrientation stops being a public method on a
+        // Window"). Asserted on the window rather than on the view model, because the view model's
+        // SetOrientation is meant to be public - it is how the orientation reaches the readout.
+        MethodInfo? windowSetOrientation = typeof(MainWindow).GetMethod("SetOrientation", flags);
+        Assert.NotNull(windowSetOrientation);
+        Assert.False(windowSetOrientation!.IsPublic,
+            "MainWindow.SetOrientation is public again. 6b narrowed it to private; its only caller in the whole "
+            + "solution was RenderFrame, so nothing outside the window ever needed it.");
+
+        Assert.NotNull(typeof(MainViewModel).GetMethod("SetOrientation", BindingFlags.Public | BindingFlags.Instance));
+    }
+    /// <summary>
     /// The state that moved out of the window must stay out. MIGRATION_PLAN 5 names the camera state as
     /// `_yaw/_pitch/_zoom`, but the fields MainWindow actually held were `_camYaw`, `_camPitch`,
     /// `_camDistance`, `_viewRotation`, `_lastMouse` and `_dragging` - six, not three - and the zone/map

@@ -307,11 +307,21 @@ public class FrameCoalescerTests
     }
 
     /// <summary>
-    /// Phase 4's acceptance line in §5: "Frame rate is a declared UI setting, not a baud-rate side
-    /// effect." A setting the user cannot reach is not a setting, so the control and its handler are
-    /// checked in the actual XAML and code-behind. These assertions fail if the control is removed,
-    /// if its handler is unwired, or if the per-frame marshalling is reinstated — which is what makes
-    /// them guards rather than decoration.
+    /// Phase 4's acceptance line in §5: "Frame rate is a declared UI setting, not a baud-rate side effect."
+    /// A setting the user cannot reach is not a setting, so the control and its handler are checked in the
+    /// actual XAML and code-behind. These assertions fail if the control is removed, if its handler is
+    /// unwired, or if the per-frame marshalling is reinstated — which is what makes them guards rather than
+    /// decoration.
+    ///
+    /// WHAT PHASE 6b CHANGED HERE, AND WHAT IT DID NOT. The rate's policy moved to MainViewModel; the timer
+    /// stayed on the window, per §2 ("the policy (rate, drop counter) belongs on the view model; the timer is
+    /// a UI-thread mechanism and can stay with the view"), so the two timer assertions below still read
+    /// MainWindow.xaml.cs and still mean what they said. The frame path changed shape: MainWindow no longer
+    /// subscribes to the transport itself. MainViewModel subscribes and re-raises the frame as FrameArrived,
+    /// and the window's subscription writes it into the coalescer. So the D2 claim — the frame path hands the
+    /// frame to the coalescer and returns, without queueing a render — is now asserted against that
+    /// subscription instead of against a method called Stream_FrameReceived, which no longer exists in the
+    /// window. The claim is unchanged; only the place it is checked has moved.
     /// </summary>
     [Fact]
     public void RenderRateIsAUserVisibleSetting_AndFrameReceivedNoLongerMarshalsPerFrame()
@@ -326,11 +336,54 @@ public class FrameCoalescerTests
         Assert.Contains("_renderTimer.Tick += RenderTimer_Tick;", code, StringComparison.Ordinal);
         Assert.Contains("_renderTimer.Interval = RenderInterval(", code, StringComparison.Ordinal);
 
-        // The frame path must hand the frame to the coalescer and stop. If Dispatcher.BeginInvoke
-        // reappears anywhere in it, D2 is back.
-        string frameHandler = ExtractMethod(code, "private void Stream_FrameReceived");
-        Assert.Contains("_coalescer.Write(frame);", frameHandler, StringComparison.Ordinal);
-        Assert.DoesNotContain("Dispatcher.BeginInvoke", frameHandler, StringComparison.Ordinal);
+        // The view's frame path: one subscription, one write into the coalescer, nothing else. If
+        // Dispatcher.BeginInvoke reappears anywhere in it, D2 is back.
+        Assert.Contains("_viewModel.FrameArrived += (_, frame) => _coalescer.Write(frame);", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("Dispatcher.BeginInvoke", ExtractMethod(code, "private void RenderTimer_Tick"), StringComparison.Ordinal);
+
+        // And the transport-side half, which since 6b lives in MainViewModel: it forwards the frame and does
+        // not touch UI state, which is how a type that cannot hold a Dispatcher still honours
+        // ISensorStream's "the consumer marshals" contract.
+        string viewModel = File.ReadAllText(Path.Combine(appDir, "MainViewModel.cs"));
+        Assert.Contains("private void Stream_FrameReceived(object? sender, SensorFrame frame) => FrameArrived?.Invoke(sender, frame);", viewModel, StringComparison.Ordinal);
+
+        // Stripped before the absence is asserted, and that stripping is the whole point. MainViewModel's own
+        // class comment quotes `Dispatcher.BeginInvoke` twice while explaining why this type cannot call it.
+        // Asserting DoesNotContain over the raw file trips on that explanation - the hazard
+        // ArchitectureInvariantTests records for StripLineComments: a guard that punishes documentation of a
+        // removed thing trains everyone to delete the documentation. ExtractMethod cannot be used here either:
+        // these three handlers are expression-bodied, so brace matching would run on past them into some other
+        // method's body and measure the wrong code entirely. So the assertion measures the file with the prose
+        // removed, and the explanation stays where it is.
+        string viewModelCode = StripLineComments(viewModel);
+        Assert.DoesNotContain("Dispatcher", viewModelCode, StringComparison.Ordinal);
+
+        // The positive half: the status handler forwards rather than marshalling. Without this, the assertion
+        // above would pass on a handler that had simply been deleted.
+        Assert.Contains("TransportAnnounced?.Invoke", viewModelCode, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Removes // line comments from source text, so a source-text guard measures code and not prose.
+    ///
+    /// Duplicated from ArchitectureInvariantTests rather than shared, for the reason that file already
+    /// records: making one guard depend on another test class's private helper couples two unrelated guards to
+    /// one file's internals.
+    ///
+    /// THE LIMITATION, stated rather than hidden: this strips from "//" to end of line without parsing, so a
+    /// "//" inside a string literal would be mistaken for the start of a comment. MainViewModel.cs contains no
+    /// such literal today; if one is added, this over-strips and the guard weakens silently.
+    /// </summary>
+    private static string StripLineComments(string source)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (string line in source.Split('\n'))
+        {
+            int comment = line.IndexOf("//", StringComparison.Ordinal);
+            builder.AppendLine(comment >= 0 ? line[..comment] : line);
+        }
+
+        return builder.ToString();
     }
 
     /// <summary>
@@ -364,16 +417,42 @@ public class FrameCoalescerTests
     }
 
     /// <summary>
-    /// 60 Hz is the rate the plan names. Pinned so the default is a decision on the record rather
-    /// than a number that happened to be typed.
+    /// 60 Hz is the rate the plan names. Pinned so the default is a decision on the record rather than a
+    /// number that happened to be typed.
+    ///
+    /// Since Phase 6b the rate lives on MainViewModel, which is where §2 says the *policy* belongs ("the
+    /// render timer, the FrameCoalescer instance and the render-rate combo box are currently MainWindow state.
+    /// The policy (rate, drop counter) belongs on the view model"). MainWindow reads this constant to populate
+    /// the combo box and to set the timer's initial interval, so the constant is public on the view model and
+    /// Public is in the flags - it was a private const on MainWindow before 6b, and a lookup that still asked
+    /// only for NonPublic would report a member that legitimately had to become shared as missing.
     /// </summary>
     [Fact]
     public void DefaultRenderRateIsThePlannedSixtyHertz()
     {
-        FieldInfo field = typeof(MainWindow)
-            .GetField("DefaultRenderRateHz", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Static)!;
+        FieldInfo field = typeof(MainViewModel)
+            .GetField("DefaultRenderRateHz", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static)!;
 
         Assert.Equal(60, (int)field.GetValue(null)!);
+    }
+
+    /// <summary>
+    /// THE RATE IS ONE NUMBER, DECLARED ONCE. §2's warning about 6b is that splitting the policy from the timer
+    /// "wrongly is how the rate ends up as a field on a Window again". A window that declared its own rate
+    /// while the view model declared another would pass every guard written before 6b, because each guard
+    /// would find the copy it was already looking for. This one looks for the absence of the second copy.
+    /// </summary>
+    [Fact]
+    public void TheRenderRateIsDeclaredOnce_NotOnBothTheViewAndTheViewModel()
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static;
+
+        Assert.NotNull(typeof(MainViewModel).GetField("DefaultRenderRateHz", flags));
+        Assert.Null(typeof(MainWindow).GetField("DefaultRenderRateHz", flags));
+        Assert.Null(typeof(MainWindow).GetField("RenderRateChoices", flags));
+
+        // And the view still has to be able to reach the choices, or the toolbar would be empty.
+        Assert.NotNull(typeof(MainViewModel).GetField("RenderRateChoices", flags));
     }
 
     // -----------------------------------------------------------------------------------------
@@ -489,10 +568,16 @@ public class FrameCoalescerTests
     }
 
     /// <summary>
-    /// The band the status line counts against, pinned to the constants MainWindow declares rather than to
-    /// the numbers a test would like them to be. Read by reflection for the same reason
-    /// DefaultRenderRateIsThePlannedSixtyHertz does: these are private constants, and the only honest way to
-    /// assert a private constant is to read it from the type that declares it.
+    /// The band the status line counts against, pinned to the constants the application declares rather than
+    /// to the numbers a test would like them to be. Read by reflection for the same reason
+    /// DefaultRenderRateIsThePlannedSixtyHertz does: these are constants on a type, and the only honest way to
+    /// assert a constant is to read it from the type that declares it.
+    ///
+    /// Since Phase 6b that type is MainViewModel, not MainWindow: §2 assigns the status text and its
+    /// arithmetic to the view model, and MainWindow now takes its scene constants FROM MainViewModel instead
+    /// of declaring its own copy. Reading them by reflection is what makes the test survive that move and
+    /// still mean something: it follows the constants to wherever the application keeps them, and a move that
+    /// left two copies behind would show up here as two numbers that no longer agree.
     ///
     /// The expected values are asserted here as well as read, so a change to the app's band fails loudly at
     /// the point of change instead of silently moving every comparison in the test above.
@@ -507,14 +592,20 @@ public class FrameCoalescerTests
     }
 
     /// <summary>
-    /// MainWindow's private MinDistanceMm / MaxDistanceMm, read from the compiled type.
+    /// The application's own MinDistanceMm / MaxDistanceMm, read from the compiled type that declares them.
+    ///
+    /// Public is in the flags because since Phase 6b these constants are public: MainWindow reads them to
+    /// build the zone renderer, so they cannot be private to the type that owns them. Before 6b they were
+    /// private consts on MainWindow and this lookup used only NonPublic | Static. The flag change is not a
+    /// loosening - it follows the constants to the type that now declares them, and a lookup that still asked
+    /// for a private constant would fail on a member that legitimately had to become shared.
     /// </summary>
     private static (double Min, double Max) AppVisibleBand()
     {
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Static;
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static;
 
-        FieldInfo min = typeof(MainWindow).GetField("MinDistanceMm", flags)!;
-        FieldInfo max = typeof(MainWindow).GetField("MaxDistanceMm", flags)!;
+        FieldInfo min = typeof(MainViewModel).GetField("MinDistanceMm", flags)!;
+        FieldInfo max = typeof(MainViewModel).GetField("MaxDistanceMm", flags)!;
 
         return ((double)min.GetValue(null)!, (double)max.GetValue(null)!);
     }

@@ -1,26 +1,43 @@
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
 using EchoEnvironment.Core;
-using EchoEnvironment.Hardware;
 using EchoEnvironment.Rendering;
 
 namespace EchoEnvironment
 {
     /// <summary>
     /// Displays VL53L5CX distance frames as points on a sphere around the sensor.
+    ///
+    /// PHASE 6b: this is the view. It owns the scene graph, the camera, the zone renderer, the render timer
+    /// and the frame coalescer - everything about turning a frame into pixels on a UI thread - and it owns no
+    /// application state and no policy. The status text, the port list, connect/disconnect, the orientation
+    /// readout, the keep-map choice, the capture request and the render rate all live in MainViewModel, which
+    /// is constructed from the SensorSource the composition root chose.
+    ///
+    /// WHY THE VIEW MODEL IS WIRED BY HAND AND NOT BY BINDING. MainViewModel raises PropertyChanged for the
+    /// two strings the toolbar displays, and the handlers below are what consume them. ICommand is not used:
+    /// it lives in PresentationCore, and ArchitectureInvariantTests.WpfConversionIsConfinedToOneType forbids
+    /// any public type in this assembly other than WpfMath, Window and Application from naming a Core type and
+    /// a WPF type in the same public surface. MainViewModel speaks Core and Hardware, so it may not speak WPF
+    /// either. See that type's own comment for the full reasoning.
+    ///
+    /// WHY THE VIEW STILL HOLDS THE COALESCER AND THE TIMER. §2: "the *policy* (rate, drop counter) belongs on
+    /// the view model; the *timer* is a UI-thread mechanism and can stay with the view." The coalescer's
+    /// policy lives in Core and is unchanged; the window holds the instance because draining it is the tick,
+    /// and the tick is a UI-thread act. The rate that sets the interval is the view model's.
     /// </summary>
     public partial class MainWindow : Window
     {
-        private const double FieldOfViewDegrees = 45.0;
-        private const double MaxDistanceMm = 4000.0;
-        private const double MinDistanceMm = 20.0;
+        // Phase 6b: the window declares no scene constants of its own. The field of view, the band a reading
+        // has to fall inside to be drawn, and the map bucket count are MainViewModel's, and the window reads
+        // them from there. Before 6b they were declared here and the status line's arithmetic declared them
+        // again in effect, which is two numbers that could drift apart while every zone still rendered.
 
-        // LineHalfWidth moved to ScenePrimitives with AddLine, and SceneUnitsPerMm moved to
-        // ZoneRenderer with UpdateFrame: both describe how a distance becomes a drawn thing, which is
-        // not something the window needs to know.
+        // LineHalfWidth moved to ScenePrimitives with AddLine, and SceneUnitsPerMm moved to ZoneRenderer with
+        // UpdateFrame: both describe how a distance becomes a drawn thing, which is not something the window
+        // needs to know.
 
         private readonly Model3DGroup _boardGroup = new();
 
@@ -32,97 +49,87 @@ namespace EchoEnvironment
         private readonly SceneLayers _layers;
 
         private readonly MatrixTransform3D _orientation = new(Matrix3D.Identity);
+
+        /// <summary>
+        /// Phase 6b: the orientation *matrix* is filtered here, on the UI thread, because the transform the
+        /// scene rotates by is a WPF object and the filter's output has to reach it. The angles the readout
+        /// prints are derived from the same Mat3 by MainViewModel, which never sees a Matrix3D.
+        /// </summary>
         private readonly OrientationFilter _imuFilter = new();
+
         private long _lastImuTimestamp;
-        private const string DefaultPort = "COM12";
-        private ISensorStream? _stream;
-        private string? _capturePath;
 
         /// <summary>
-        /// Which transport this window was told to use, decided by the composition root (MIGRATION_PLAN 6c)
-        /// and never chosen here. Held as a factory rather than as a stream because the connection lifecycle
-        /// below is create-on-connect / dispose-on-disconnect: one injected instance would be disposed by the
-        /// first Disconnect and the second Connect would meet an ObjectDisposedException.
+        /// The application state and policy this view draws (MIGRATION_PLAN 6b). Assigned in the constructor
+        /// rather than by initialiser because the window needs it before it can populate the toolbar.
         /// </summary>
-        private readonly SensorSource _source;
+        private readonly MainViewModel _viewModel;
 
         /// <summary>
-        /// Never opened. Exists only so RefreshPorts asks the transport seam which ports exist,
-        /// instead of calling SerialPort directly — which is what lets the App drop its
-        /// System.IO.Ports reference entirely.
-        ///
-        /// It stays a SerialSensorStream even when the session is --sim or --replay, and that is deliberate
-        /// rather than an oversight: the port list is a question about the machine, not about the chosen
-        /// source, and asking SimulatedSensorStream would answer it with the single fake name "SIM". The
-        /// toolbar still shows what ports exist so a --sim session can be switched to a real device by
-        /// pressing Connect again.
+        /// Phase 5 commit 2: the zone models, the heat-grid cells, the map dictionary, the bucket geometries
+        /// and the map throttle moved to ZoneRenderer; the camera angles, the drag state and the scene
+        /// rotation moved to OrbitCameraController. Both fields are assigned in the constructor rather than by
+        /// initialiser, because both need XAML-named elements, which do not exist until InitializeComponent has
+        /// run.
         /// </summary>
-        private readonly SerialSensorStream _portProbe = new();
-
-        private int _frames;
-        private const int MapBuckets = 16;
-        private readonly GeometryModel3D _gridModel = MeshFactory.CreateGridModel(3.98, 0.5);
-
-        // Phase 5 commit 2: the zone models, the heat-grid cells, the map dictionary, the bucket
-        // geometries and the map throttle moved to ZoneRenderer; the camera angles, the drag state and
-        // the scene rotation moved to OrbitCameraController. Both fields are assigned in the
-        // constructor rather than by initialiser, because both need XAML-named elements, which do not
-        // exist until InitializeComponent has run.
         private readonly ZoneRenderer _zones;
         private readonly OrbitCameraController _orbit;
 
         /// <summary>
-        /// Phase 5 commit 3 (defect D3): the shared frozen brushes and materials the renderer reuses
-        /// across frames. A field rather than a static so the cache is per window, matching BrushCache's
-        /// own reasoning about not sharing mutable state across a process.
+        /// Phase 5 commit 3 (defect D3): the shared frozen brushes and materials the renderer reuses across
+        /// frames. A field rather than a static so the cache is per window, matching BrushCache's own
+        /// reasoning about not sharing mutable state across a process.
         /// </summary>
         private readonly BrushCache _brushes = new();
 
-        // Phase 4 (defect D2): frames arrive on the transport thread and are drained by this timer on
-        // the UI thread, one per tick. The rate is a declared setting in the toolbar, so frame rate is
-        // a UI decision instead of a consequence of the baud rate.
+        // Phase 4 (defect D2): frames arrive on the transport thread and are drained by this timer on the UI
+        // thread, one per tick. The rate is a declared setting in the toolbar, so frame rate is a UI decision
+        // instead of a consequence of the baud rate. 6b moved the *rate* to MainViewModel; the timer stayed
+        // here because a DispatcherTimer is a UI-thread mechanism.
         private readonly FrameCoalescer _coalescer = new();
         private readonly DispatcherTimer _renderTimer = new();
-        private static readonly int[] RenderRateChoices = [15, 30, 60, 120];
-        private const int DefaultRenderRateHz = 60;
+
+        private readonly GeometryModel3D _gridModel = MeshFactory.CreateGridModel(3.98, 0.5);
 
         /// <summary>
-        /// Builds the window for one chosen sensor source (MIGRATION_PLAN 6c).
+        /// Builds the view for one chosen sensor source (MIGRATION_PLAN 6c) and the state that source implies
+        /// (6b).
         ///
-        /// The parameter is a SensorSource and not an ISensorStream on purpose: the window must be able to
-        /// create a stream on every Connect and dispose it on every Disconnect, which is the lifecycle this
-        /// class has had since Phase 3. Injecting a ready-made stream would break the second Connect.
+        /// The parameter is a SensorSource and not an ISensorStream on purpose: the connection lifecycle is
+        /// create-on-connect / dispose-on-disconnect, so MainViewModel must be able to build a stream on every
+        /// Connect and dispose it on every Disconnect. Injecting a ready-made stream would break the second
+        /// Connect. The view model is not a second constructor parameter because it is derived from the source
+        /// one-for-one; taking both would let a caller pair a view model with a different source.
         /// </summary>
         public MainWindow(SensorSource source)
         {
             ArgumentNullException.ThrowIfNull(source);
-            _source = source;
+            _viewModel = new MainViewModel(source);
 
             InitializeComponent();
 
-            // Both collaborators take XAML-named elements, so neither can exist before
-            // InitializeComponent. They are created before the scene graph because the view transforms
-            // below come from the orbit controller.
+            // Both collaborators take XAML-named elements, so neither can exist before InitializeComponent.
+            // They are created before the scene graph because the view transforms below come from the orbit
+            // controller.
             _orbit = new OrbitCameraController(Camera, SensorVisual, ViewBorder);
 
-            // D8 (MIGRATION_PLAN 5c): the scene's layers are named and ordered by SceneLayers, once, in
-            // one constructor. What used to sit here was a flat group built by appending - marker, map,
-            // zones, then the transparent sphere "added last" with a comment explaining that WPF blends
-            // transparent models over what was drawn before - while ShowGrid_Click inserted the grid at
-            // Children.Count - 1 of that same collection.
+            // D8 (MIGRATION_PLAN 5c): the scene's layers are named and ordered by SceneLayers, once, in one
+            // constructor. What used to sit here was a flat group built by appending - marker, map, zones,
+            // then the transparent sphere "added last" with a comment explaining that WPF blends transparent
+            // models over what was drawn before - while ShowGrid_Click inserted the grid at Children.Count - 1
+            // of that same collection.
             //
-            // The order that comment recorded is still the order that matters, and it is now guaranteed
-            // by construction instead of by an insertion sequence: the transparent reference sphere is
-            // the last layer. The order *between* the opaque layers (grid, map, marker, zones) is now
-            // declared by role rather than by the sequence the old constructor happened to use, because
-            // WPF depth-tests opaque models and the listing order does not decide which is in front.
+            // The order that comment recorded is still the order that matters, and it is now guaranteed by
+            // construction instead of by an insertion sequence: the transparent reference sphere is the last
+            // layer. The order *between* the opaque layers (grid, map, marker, zones) is now declared by role
+            // rather than by the sequence the old constructor happened to use, because WPF depth-tests opaque
+            // models and the listing order does not decide which is in front.
             _layers = new SceneLayers(MeshFactory.CreateSensorMarker(), MeshFactory.CreateReferenceSphere(4.0));
 
-            // The view transform goes on the zone group, not on the sensor layer: the marker sits still
-            // while the zone fan rotates, exactly as it did when the marker was a separate child of the
-            // flat root.
+            // The view transform goes on the zone group, not on the sensor layer: the marker sits still while
+            // the zone fan rotates, exactly as it did when the marker was a separate child of the flat root.
             _layers.Zones.Group.Transform = _orbit.CreateViewTransform(false, _orientation);
-            _zones = new ZoneRenderer(_layers.Zones.Group, _layers.Map.Group, HeatGrid, _brushes, MinDistanceMm, MaxDistanceMm, FieldOfViewDegrees, MapBuckets);
+            _zones = new ZoneRenderer(_layers.Zones.Group, _layers.Map.Group, HeatGrid, _brushes, MainViewModel.MinDistanceMm, MainViewModel.MaxDistanceMm, MainViewModel.FieldOfViewDegrees, MainViewModel.MapBuckets);
 
             SensorVisual.Content = _layers.Root;
 
@@ -137,88 +144,50 @@ namespace EchoEnvironment
             _orbit.UpdateCamera();
             PreviewKeyDown += Window_PreviewKeyDown;
 
-            // Phase 4: the render rate is a UI policy declared here, not a side effect of how fast
-            // the serial side happens to deliver (defect D2). The combo box is populated in code
-            // rather than in XAML so the numbers and RenderInterval share one source.
-            foreach (int hz in RenderRateChoices)
+            // Phase 4: the render rate is a UI policy, not a side effect of how fast the serial side happens
+            // to deliver (defect D2). The combo box is populated in code rather than in XAML so the numbers
+            // and RenderInterval share one source - and since 6b that source is the view model's.
+            foreach (int hz in MainViewModel.RenderRateChoices)
             {
                 RenderRateComboBox.Items.Add(hz);
             }
 
-            RenderRateComboBox.SelectedItem = DefaultRenderRateHz;
-            _renderTimer.Interval = RenderInterval(DefaultRenderRateHz);
+            RenderRateComboBox.SelectedItem = MainViewModel.DefaultRenderRateHz;
+            _renderTimer.Interval = RenderInterval(MainViewModel.DefaultRenderRateHz);
             _renderTimer.Tick += RenderTimer_Tick;
+
+            _viewModel.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainViewModel.Status))
+                {
+                    StatusText.Text = _viewModel.Status;
+                }
+                else if (e.PropertyName == nameof(MainViewModel.OrientationReadout))
+                {
+                    OrientationText.Text = _viewModel.OrientationReadout;
+                }
+            };
+
+            // The transport raised these from its own thread. Queueing them through the Dispatcher is what
+            // preserves the order Connect relies on: Open raises "Connected to COM12" asynchronously, so the
+            // capture-path message has to land behind it or it is overwritten before anyone can read it.
+            _viewModel.TransportAnnounced += (_, message) => Dispatcher.BeginInvoke(() => StatusText.Text = message);
+
+            _viewModel.FrameArrived += (_, frame) => _coalescer.Write(frame);
 
             RefreshPorts();
             Closed += (_, _) => Disconnect();
 
-            // The chosen source is announced rather than left implicit. A --sim or --replay session looks
-            // identical to a serial one until something goes wrong, and the difference is not cosmetic: a
-            // replay writes no capture file, and a simulator needs no device. Saying it in the status line
-            // is what stops "why is there no data?" from becoming "is the port broken?".
-            StatusText.Text = _source.Kind switch
-            {
-                SensorSourceKind.Simulated => "Simulated source: press Connect to start synthetic frames (no hardware)",
-                SensorSourceKind.Replay => $"Replay source: press Connect to replay {_source.ReplayPath}",
-                _ => "Ready",
-            };
+            StatusText.Text = _viewModel.Status;
 
             // Raw capture is a property of the serial transport. For --sim and --replay the checkbox is
-            // disabled rather than left clickable, because a control that accepts a request nothing can
-            // honour reports a failure for a mistake the user was never allowed to make.
-            if (!_source.CaptureSupported)
+            // disabled rather than left clickable, because a control that accepts a request nothing can honour
+            // reports a failure for a mistake the user was never allowed to make.
+            if (!_viewModel.CaptureSupported)
             {
                 CaptureCheckBox.IsEnabled = false;
                 CaptureCheckBox.IsChecked = false;
             }
-        }
-
-        /// <summary>
-        /// Sets the sensor viewport (e.g. from a 9 DOF sensor) as a sensor-to-world rotation matrix.
-        ///
-        /// Takes Core's Mat3 and converts to WPF's Matrix3D exactly once, here. The angle readout
-        /// below reads Mat3 directly: the angles are a property of the orientation, not of whichever
-        /// matrix type the UI happens to render with.
-        ///
-        /// DEFECT D1, FIXED AT PHASE 6a. The three expressions below were each physically correct and
-        /// the variable names were correct; only the two printed labels were swapped — the readout
-        /// printed the roll value under "Pitch" and the elevation value under "Roll". The fix is the
-        /// format string, and nothing else: changing an expression here would change what is measured,
-        /// which is a different change from naming it correctly.
-        ///
-        /// WHY THE EXPRESSIONS ARE NOT MERELY RENAMED. `asin(-M32)` is the elevation of the sensor's
-        /// look direction above horizontal — a genuine pitch. `atan2(M12, M22)` is the angle of world up
-        /// projected into the sensor's own XY plane, i.e. image roll: rotation about the sensor's own
-        /// optical (-Z) axis. MIGRATION_PLAN 6a originally described the second one as "rotation about
-        /// the up axis"; §7 finding 3 corrected that, and
-        /// RollAboutOpticalAxis_DoesNotChangeElevation_AndIsNotRotationAboutUp is the test that proves
-        /// the correction, because a board rolled about its optical axis while level is NOT rotated about
-        /// the world up axis and still reads 30 degrees.
-        ///
-        /// THE CONDITIONING CAVEAT, WHICH A LABEL FIX DOES NOT TOUCH. `atan2(M12, M22)` amplifies
-        /// accelerometer noise by 1 / hypot(M12, M22). On the captured session that pair never exceeds
-        /// 0.19 in magnitude (CapturedLog_SensorPointsAlmostStraightDown_WhichIsWhereTheAngleReadoutBreaks),
-        /// so the Roll figure amplifies noise more than 5x and approaches the point where the angle is
-        /// undefined outright — the gimbal-lock signature of an asin decomposition with M32 near 1. The
-        /// labels are now correct; the number under "Roll" is still the least trustworthy one on screen.
-        /// </summary>
-        public void SetOrientation(Mat3 rotation)
-        {
-            _orientation.Matrix = rotation.ToMatrix3D();
-
-            // Forward is the sensor's -Z axis; world axes are X east, Y up, Z south.
-            double heading = Math.Atan2(-rotation.M31, rotation.M33) * 180.0 / Math.PI;
-            if (heading < 0)
-            {
-                heading += 360;
-            }
-
-            double pitch = Math.Asin(Math.Clamp(-rotation.M32, -1, 1)) * 180.0 / Math.PI;
-            double roll = Math.Atan2(rotation.M12, rotation.M22) * 180.0 / Math.PI;
-
-            // D1 was here: `Pitch: {roll}` and `Roll: {pitch}`. Each label now prints the value named by
-            // the variable of the same name, which is the whole of the fix.
-            OrientationText.Text = $"Orientation\nHeading: {heading,6:0.0}°\nPitch:   {pitch,6:0.0}°\nRoll:    {roll,6:0.0}°";
         }
 
         private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -263,9 +232,8 @@ namespace EchoEnvironment
                     return;
             }
 
-            // The arrow cases used to fall through to an UpdateCamera() call at the end of this
-            // method; each Nudge now refreshes the camera itself, so nothing is owed here except
-            // marking the key handled.
+            // The arrow cases used to fall through to an UpdateCamera() call at the end of this method; each
+            // Nudge now refreshes the camera itself, so nothing is owed here except marking the key handled.
             e.Handled = true;
         }
 
@@ -276,180 +244,100 @@ namespace EchoEnvironment
             _orbit.BeginDrag(e.GetPosition(ViewBorder));
         }
 
-        private void View_MouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
-        {
-            _orbit.EndDrag();
-        }
+        private void View_MouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e) => _orbit.EndDrag();
 
         private void View_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
         {
-            // DragTo carries the _dragging guard, so a move that is not part of a drag is ignored
-            // here exactly as it was when the check sat in this method.
+            // DragTo carries the _dragging guard, so a move that is not part of a drag is ignored here exactly
+            // as it was when the check sat in this method.
             _orbit.DragTo(e.GetPosition(ViewBorder));
         }
 
-        private void View_MouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
-        {
-            _orbit.Zoom(e.Delta);
-        }
+        private void View_MouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e) => _orbit.Zoom(e.Delta);
 
         private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshPorts();
 
+        /// <summary>
+        /// Asks the view model for the port list and shows it. Phase 3 moved the question to the transport
+        /// seam; 6b moved it to the view model. The App still does not reference System.IO.Ports at all.
+        /// </summary>
         private void RefreshPorts()
         {
-            string selected = PortComboBox.Text;
-            // Phase 3: the port list comes from the transport seam, not from SerialPort directly.
-            // The App no longer references System.IO.Ports at all.
-            PortComboBox.ItemsSource = _portProbe.ListPorts().Select(p => p.Name).Order().ToList();
-            PortComboBox.Text = string.IsNullOrWhiteSpace(selected)
-                ? (PortComboBox.Items.Contains(DefaultPort) ? DefaultPort : PortComboBox.Items.Count > 0 ? PortComboBox.Items[0]?.ToString() : DefaultPort)
-                : selected;
+            _viewModel.RefreshPorts(PortComboBox.Text);
+            PortComboBox.ItemsSource = _viewModel.Ports;
+            PortComboBox.Text = _viewModel.SelectedPort;
         }
 
         /// <summary>
-        /// Connect, or disconnect if already connected. The button is one control for both directions and
-        /// the state is `_stream is not null`, exactly as it was before Phase 6c.
+        /// Connect, or disconnect if already connected. The button is one control for both directions and the
+        /// state is "the view model has a live stream", exactly as it was when this method owned the stream.
         ///
-        /// WHAT 6c CHANGED: the stream is no longer `new SerialSensorStream()` written here. It comes from
-        /// the composition root's SensorSource, so --sim and --replay produce a window whose Connect button
-        /// starts the source the command line asked for. The lifecycle is unchanged - the source is a
-        /// factory, so every Connect gets a live stream and Disconnect disposes it - which is why a second
-        /// Connect after a Disconnect still works, and why a replay replays again rather than meeting an
-        /// ObjectDisposedException.
+        /// WHAT 6b CHANGED: the decision, the stream's lifecycle and the status line are MainViewModel's.
+        /// What is left here is the part only a view can do - start and stop the render timer, reset the IMU
+        /// filter and the coalescer that belong to it, and relabel the button. The reset on connect is
+        /// deliberately still here: the filter and the coalescer are this window's state, and a new session
+        /// must not inherit either.
         ///
-        /// WHAT IS UNCHANGED AND DELIBERATELY SO: the port/baud validation, the exception filter, the
-        /// capture armed before Open(), and the Dispatcher.BeginInvoke that queues the capture path behind
-        /// Open()'s own status message. Each of those is a behaviour with a reason recorded in its own
-        /// comment, and 6c is a change to which stream is chosen, not to how a connection is opened.
+        /// ONE ORDERING DIFFERENCE, STATED RATHER THAN HIDDEN. The original Disconnect disposed the stream
+        /// first and stopped the render timer afterwards. Disconnect below stops the timer first. The
+        /// difference is not observable from the UI thread - no tick can run in the middle of this handler -
+        /// but it is a real change in which side is quiesced first, and stopping the drain before the
+        /// transport is torn down is the safer of the two orders: the transport thread can still be inside
+        /// FrameArrived when Dispose runs, and a stopped timer means nothing renders what lands after it.
         /// </summary>
         private void Connect_Click(object sender, RoutedEventArgs e)
         {
-            if (_stream is not null)
+            if (_viewModel.IsConnected)
             {
                 Disconnect();
                 return;
             }
 
-            // For a serial session the port and baud come from the toolbar. For --sim and --replay they are
-            // ignored by the stream itself (SimulatedSensorStream paces itself; ReplaySensorStream reads the
-            // log), but the toolbar is still what the user sees, so an empty port box is reported rather than
-            // silently accepted and then ignored.
-            if (string.IsNullOrWhiteSpace(PortComboBox.Text) || !int.TryParse(BaudTextBox.Text, out int baud) || baud <= 0)
+            if (!_viewModel.Connect(PortComboBox.Text, BaudTextBox.Text))
             {
-                StatusText.Text = "Invalid port or baud rate";
+                // The view model refused - invalid port or baud, or the open failed - and it has already
+                // written the reason to the status line. Nothing was started, so nothing has to be stopped.
                 return;
             }
 
-            ISensorStream stream = _source.CreateStream();
-            try
+            _imuFilter.Reset();
+            _lastImuTimestamp = 0;
+            _coalescer.Clear();
+            _renderTimer.Start();
+            ConnectButton.Content = "Disconnect";
+
+            // The capture path has to be readable for the whole session: Disconnect's report goes to a window
+            // that is already on its way out when the app is closed rather than disconnected, and a capture
+            // whose location nobody knows is a capture that gets thrown away. Queued behind Open()'s own
+            // status message, exactly as it was when this method owned the connection.
+            if (_viewModel.CapturePath is not null)
             {
-                stream.FrameReceived += Stream_FrameReceived;
-                stream.LineRejected += Stream_LineRejected;
-                stream.StatusChanged += Stream_StatusChanged;
-
-                // Armed BEFORE Open(): DataReceived can fire as soon as the port is open, so a capture
-                // attached afterwards would miss the first burst — and the first burst is exactly where
-                // a framing difference between device and replay would show up.
-                if (CaptureCheckBox.IsChecked == true && stream is SerialSensorStream serial)
-                {
-                    StartCaptureFor(serial);
-                }
-
-                stream.Open(PortComboBox.Text, baud);
-
-                _stream = stream;
-                _imuFilter.Reset();
-                _lastImuTimestamp = 0;
-                _coalescer.Clear();
-                _renderTimer.Start();
-                ConnectButton.Content = "Disconnect";
-
-                // Open raised "Connected to COM12" through Dispatcher.BeginInvoke, which lands after
-                // anything this method sets synchronously - so the capture path has to be queued behind
-                // it or it is overwritten before anyone can read it. The path has to be readable for the
-                // whole session: Disconnect's report goes to a window that is already on its way out when
-                // the app is closed rather than disconnected, and a capture whose location nobody knows
-                // is a capture that gets thrown away.
-                if (_capturePath is not null)
-                {
-                    Dispatcher.BeginInvoke(() => StatusText.Text = $"Connected - capturing to {_capturePath}");
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
-            {
-                // The stream was never handed to Disconnect(), so it is released right here.
-                // Whether a failed Open() leaks the port is defect D5, inside SerialSensorStream:
-                // it is preserved unchanged by this extraction and fixed in 3d's own commit.
-                stream.Dispose();
-                StatusText.Text = ex.Message;
+                Dispatcher.BeginInvoke(() => StatusText.Text = $"Connected - capturing to {_viewModel.CapturePath}");
             }
         }
 
         private void Disconnect()
         {
-            ISensorStream? stream = _stream;
-            _stream = null;
-            long captured = 0;
-            if (stream is not null)
-            {
-                // The count is read before Dispose, because Dispose is what closes the file and the
-                // count is the only record of how much arrived. AutoFlush on the capture means the
-                // count and the file agree.
-                captured = stream is SerialSensorStream serial ? serial.CaptureCharacters : 0;
+            // Quiesce the drain before tearing down the transport. The transport thread can still be inside
+            // FrameArrived when Dispose runs, and a stopped timer means nothing renders what lands after it.
+            StopRendering();
+            _viewModel.Disconnect();
+            ConnectButton.Content = "Connect";
+        }
 
-                stream.FrameReceived -= Stream_FrameReceived;
-                stream.LineRejected -= Stream_LineRejected;
-                stream.StatusChanged -= Stream_StatusChanged;
-                stream.Dispose();
-            }
-
-            // Phase 4: the coalescer outlives the connection, so a frame that arrived just before the
-            // port closed would otherwise be rendered by the next tick as if it belonged to the next
-            // connection. Stopping the timer first means nothing drains it on the way out.
+        private void StopRendering()
+        {
+            // Phase 4: the coalescer outlives the connection, so a frame that arrived just before the port
+            // closed would otherwise be rendered by the next tick as if it belonged to the next connection.
+            // Stopping the timer first means nothing drains it on the way out.
             _renderTimer.Stop();
             _coalescer.Clear();
-
-            // The capture closes inside Dispose. Only a session that actually captured gets a
-            // different status message, so the never-capturing path still reads exactly "Disconnected".
-            string? capturePath = _capturePath;
-            _capturePath = null;
-
-            ConnectButton.Content = "Connect";
-            StatusText.Text = capturePath is null
-                ? "Disconnected"
-                : $"Disconnected - captured {captured} characters to {capturePath}";
-        }
-
-        // Phase 3: the transport's own thread raises these (see ISensorStream's threading contract),
-        // so every one of them marshals through Dispatcher exactly as Port_DataReceived did before
-        // the seam existed. The obligation to marshal stayed with the consumer, not the stream.
-        private void Stream_StatusChanged(object? sender, string status)
-        {
-            Dispatcher.BeginInvoke(() => StatusText.Text = status);
-        }
-
-        private void Stream_LineRejected(object? sender, string line)
-        {
-            string rejected = line.Length > 80 ? line[..80] : line;
-            Dispatcher.BeginInvoke(() => StatusText.Text = $"Rejected line: {rejected}");
-        }
-
-        // Phase 4 (defect D2): this no longer marshals. It hands the frame to a one-slot coalescer
-        // and returns, so the transport thread is never queued behind a render and the UI never holds
-        // more than one frame of pending work. The Dispatcher.BeginInvoke that used to sit here is
-        // what made latency grow with frame rate: each frame queued its own full render.
-        // ISensorStream's threading contract still says the consumer marshals — it now does that by
-        // not touching UI state here at all, and by rendering from a timer that already runs on the
-        // UI thread.
-        private void Stream_FrameReceived(object? sender, SensorFrame frame)
-        {
-            _coalescer.Write(frame);
         }
 
         private void RenderTimer_Tick(object? sender, EventArgs e)
         {
-            // Exactly one frame per tick, which is the whole point: the render rate is a UI policy,
-            // not a consequence of how fast the serial side happens to deliver.
+            // Exactly one frame per tick, which is the whole point: the render rate is a UI policy, not a
+            // consequence of how fast the serial side happens to deliver.
             if (_coalescer.TryRead(out SensorFrame frame))
             {
                 RenderFrame(frame);
@@ -459,28 +347,23 @@ namespace EchoEnvironment
         /// <summary>
         /// The body that used to run inside Dispatcher.BeginInvoke, unchanged except for where it runs.
         ///
-        /// NO COPIES ANY MORE (MIGRATION_PLAN §12.8 item 4 — the half of Phase 5 commit 1 did not reach).
-        /// This method used to write `frame.Imu.ToArray()` and `frame.Distances.ToArray()`: SensorFrame
-        /// stores both as ReadOnlyMemory, so passing them to an int[] parameter meant copying 9 and 64
-        /// integers on every rendered frame purely to satisfy a signature. Both consumers now take
-        /// ReadOnlySpan, so the frame's own storage is read in place and the hot path allocates nothing
-        /// for these two values.
+        /// NO COPIES ANY MORE (MIGRATION_PLAN §12.8 item 4). SensorFrame stores the distances and the IMU as
+        /// ReadOnlyMemory, and both consumers take ReadOnlySpan, so the frame's own storage is read in place
+        /// and the hot path allocates nothing for these two values.
         ///
-        /// WHY THAT IS SAFE. A span is a window onto somebody else's storage and cannot outlive it. Here
-        /// the storage is the SensorFrame parameter, which is alive for the whole method, and nothing
-        /// downstream keeps the span: OrientationFilter.Update indexes imu[0..8] into three Vec3 copies,
-        /// and ZoneRenderer.UpdateFrame reads distances only for the duration of its own call. Neither
-        /// stores a span in a field, and neither could.
+        /// WHY THAT IS SAFE. A span is a window onto somebody else's storage and cannot outlive it. Here the
+        /// storage is the SensorFrame parameter, which is alive for the whole method, and nothing downstream
+        /// keeps the span: OrientationFilter.Update indexes imu[0..8] into three Vec3 copies, and
+        /// ZoneRenderer.UpdateFrame reads distances only for the duration of its own call. Neither stores a
+        /// span in a field, and neither could.
         ///
-        /// WHY THE STATUS LINE IS NOW A LOOP. `distances.Count(d => ...)` and `distances.Max()` are LINQ
-        /// over IEnumerable, and a span is not IEnumerable. Replacing them with a loop is not a
-        /// compromise: the LINQ version allocated an enumerator and a closure over two window constants
-        /// per frame, and iterated the array twice. One pass computes both numbers. The text produced is
-        /// identical, which is what the assertions below are for.
+        /// WHAT 6b MOVED OUT. The status-line arithmetic - the visible-zone count, the maximum, the IMU
+        /// figures, the drop count - is now MainViewModel.FrameRendered, because it is application state and
+        /// not drawing. The text produced is identical, which is what
+        /// TheStatusLineLoopAgreesWithTheLinqItReplaced and the guards in ArchitectureInvariantTests are for.
         /// </summary>
         private void RenderFrame(SensorFrame frame)
         {
-            _frames++;
             if (frame.HasImu)
             {
                 long now = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -489,54 +372,40 @@ namespace EchoEnvironment
                 SetOrientation(_imuFilter.Update(frame.Imu.Span, dt));
             }
 
-            ReadOnlySpan<int> distances = frame.Distances.Span;
-            _zones.UpdateFrame(distances, KeepMapCheckBox.IsChecked == true);
+            _zones.UpdateFrame(frame.Distances.Span, _viewModel.KeepMap);
+            _viewModel.FrameRendered(frame, _coalescer.DroppedFrames);
+        }
 
-            int visible = 0;
-            int maxMm = int.MinValue;
-            for (int i = 0; i < distances.Length; i++)
-            {
-                int mm = distances[i];
-                if (mm >= MinDistanceMm && mm <= MaxDistanceMm)
-                {
-                    visible++;
-                }
-
-                if (mm > maxMm)
-                {
-                    maxMm = mm;
-                }
-            }
-
-            ReadOnlySpan<int> imu = frame.Imu.Span;
-            string imuText = frame.HasImu
-                ? $" | gyro {imu[0]},{imu[1]},{imu[2]} accel {imu[3]},{imu[4]},{imu[5]} mag {imu[6]},{imu[7]},{imu[8]}"
-                : string.Empty;
-
-            // Phase 4's gate: the drop policy must be visible rather than mysterious. Without this
-            // number, a coalescing UI that throws away 40 of 60 frames looks like a stuttering app
-            // with no explanation attached to it.
-            long dropped = _coalescer.DroppedFrames;
-            string dropText = dropped > 0 ? $" | dropped {dropped}" : string.Empty;
-            StatusText.Text = $"Frames: {_frames} ({distances.Length} zones, {visible} visible, max {maxMm} mm){imuText}{dropText}";
+        /// <summary>
+        /// Sets the sensor viewport (e.g. from a 9 DOF sensor) as a sensor-to-world rotation matrix.
+        ///
+        /// Since 6b this is private. §2: "SetOrientation stops being a public method on a Window." Nothing
+        /// outside this class ever called it - the only call site in the whole solution was RenderFrame - so
+        /// narrowing it costs nothing and removes the window's last public behaviour.
+        ///
+        /// WHY IT STILL EXISTS HERE AT ALL. This converts Core's Mat3 to WPF's Matrix3D exactly once, and the
+        /// transform it sets is the one the scene rotates by. The angle readout that used to sit in this
+        /// method is now MainViewModel's, because the angles are a property of the orientation, not of
+        /// whichever matrix type the UI happens to render with.
+        /// </summary>
+        private void SetOrientation(Mat3 rotation)
+        {
+            _orientation.Matrix = rotation.ToMatrix3D();
         }
 
         private static TimeSpan RenderInterval(int hz) => TimeSpan.FromSeconds(1.0 / hz);
 
         private void RenderRate_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (RenderRateComboBox.SelectedItem is not int hz || hz <= 0)
+            if (RenderRateComboBox.SelectedItem is not int hz || !_viewModel.SetRenderRate(hz))
             {
                 return;
             }
 
-            // DispatcherTimer re-reads Interval live; a running timer picks up the new rate on its
-            // next tick, so the rate can be changed while connected.
-            _renderTimer.Interval = RenderInterval(hz);
+            // DispatcherTimer re-reads Interval live; a running timer picks up the new rate on its next tick,
+            // so the rate can be changed while connected.
+            _renderTimer.Interval = RenderInterval(_viewModel.RenderRate);
         }
-
-
-
 
         private void ShowGrid_Click(object sender, RoutedEventArgs e)
         {
@@ -546,10 +415,10 @@ namespace EchoEnvironment
             //     root.Children.Remove(_gridModel);
             //     root.Children.Insert(root.Children.Count - 1, _gridModel);
             //
-            // The grid's position was computed as "one before the end of a collection owned by four
-            // different concerns", which is how the rule "the transparent sphere must be last" got
-            // enforced: by an index into somebody else's list. The grid now goes into the grid's own
-            // layer, and no caller reaches into the viewport's content at all.
+            // The grid's position was computed as "one before the end of a collection owned by four different
+            // concerns", which is how the rule "the transparent sphere must be last" got enforced: by an index
+            // into somebody else's list. The grid now goes into the grid's own layer, and no caller reaches
+            // into the viewport's content at all.
             if (ShowGridCheckBox.IsChecked == true)
             {
                 _layers.ShowGrid(_gridModel);
@@ -562,72 +431,21 @@ namespace EchoEnvironment
 
         private void KeepMap_Click(object sender, RoutedEventArgs e)
         {
-            if (KeepMapCheckBox.IsChecked == true)
+            // The choice is the view model's; clearing the accumulated map is an action on this window's own
+            // renderer, which is why SetKeepMap reports that a clear is owed instead of doing it.
+            if (_viewModel.SetKeepMap(KeepMapCheckBox.IsChecked == true))
             {
-                return;
+                _zones.ClearMap();
             }
-
-            _zones.ClearMap();
         }
 
         // ---------------------------------------------------------------------------------------
         // The raw capture (Phase 5). Opt-in, decided per connection, and never able to break the
-        // connection it observes.
+        // connection it observes. 6b moved the decision and the file handling to MainViewModel; what is
+        // left here is reading the checkbox.
         // ---------------------------------------------------------------------------------------
 
-        private void Capture_Click(object sender, RoutedEventArgs e) => ApplyCapture();
-
-        /// <summary>
-        /// Applies the Capture checkbox to whatever connection is live: checking it starts a capture,
-        /// unchecking it closes the file. With no connection the choice is simply remembered and
-        /// applied by Connect_Click, so arming capture before plugging the device in is the normal way
-        /// to use this.
-        /// </summary>
-        private void ApplyCapture()
-        {
-            if (_stream is not SerialSensorStream serial)
-            {
-                StatusText.Text = CaptureCheckBox.IsChecked == true
-                    ? "Capture armed: starts on Connect"
-                    : "Capture off";
-                return;
-            }
-
-            if (CaptureCheckBox.IsChecked == true)
-            {
-                StartCaptureFor(serial);
-                return;
-            }
-
-            serial.StopCapture();
-            _capturePath = null;
-            StatusText.Text = "Capture stopped";
-        }
-
-        /// <summary>
-        /// Starts a capture on a live stream. A capture that cannot be started is reported and the
-        /// connection continues unchanged — deliberately swallowed here rather than allowed to reach
-        /// Connect_Click's catch block, which would dispose the stream and end a session over a
-        /// storage problem.
-        /// </summary>
-        private void StartCaptureFor(SerialSensorStream stream)
-        {
-            int.TryParse(BaudTextBox.Text, out int baud);
-            string path = SerialSensorStream.DefaultCapturePath(PortComboBox.Text, baud);
-
-            try
-            {
-                stream.StartCapture(path);
-                _capturePath = path;
-                StatusText.Text = $"Capturing to {path}";
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-            {
-                _capturePath = null;
-                StatusText.Text = $"Capture failed: {ex.Message}";
-            }
-        }
-
-
+        private void Capture_Click(object sender, RoutedEventArgs e)
+            => _viewModel.SetCaptureRequested(CaptureCheckBox.IsChecked == true, PortComboBox.Text, BaudTextBox.Text);
     }
 }
