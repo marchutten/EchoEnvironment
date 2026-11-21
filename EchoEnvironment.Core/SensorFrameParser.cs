@@ -14,25 +14,25 @@ namespace EchoEnvironment.Core;
 ///
 /// PHASE 3 NOTE (SensorFrame added here per 9.7, deferred from Phase 2 step 2d): the frame-returning
 /// overload was added because ISensorStream.FrameReceived is the first consumer that needs a single
-/// value type. The original out int[] overload is KEPT, as Phase 2d requires, so the App and the
-/// existing parser tests compile unchanged during the transition. Delete it in Phase 5.
+/// value type. The original out int[] overload was KEPT for that transition, as Phase 2d required, and
+/// was deleted in Phase 5 (§12.8 item 4) once nothing in the app still called it.
 /// </summary>
 public static class SensorFrameParser
 {
     private static readonly char[] Separators = [',', ';', ' ', '\t'];
 
     /// <summary>
-    /// Original signature, kept for one phase and deleted in Phase 5. Behaviour is identical to the
-    /// pre-Phase-3 implementation, including the out-param reset on rejection pinned by
-    /// OnRejection_OutParamsAreReset_NotLeftStaleFromThePreviousFrame.
-    /// </summary>
-    public static bool TryParse(string line, out int[] distances, out int[]? imu)
-        => TryParseValues(line, out distances, out imu);
-
-    /// <summary>
     /// Parses a line into a SensorFrame. The timestamp is stamped at parse time; a replay source
     /// replaces it with a `with` expression rather than going through the parser.
     /// On failure, frame is default: Distances and Imu are empty and HasImu is false.
+    ///
+    /// THIS IS NOW THE ONLY TryParse SIGNATURE. The original `out int[], out int[]?` overload that
+    /// Phase 2 step 2d required to be kept during the transition was deleted here, in Phase 5, exactly
+    /// as its own comment promised (§12.8 item 4). It had zero production call sites —
+    /// SerialSensorStream.Port_DataReceived and ReplaySensorStream.Deliver both already used this
+    /// overload, and MainWindow never names the parser at all — against 28 call sites in
+    /// SensorFrameParserTests, which now go through a private test-side adapter rather than through a
+    /// production signature that nothing in the app called.
     /// </summary>
     public static bool TryParse(string line, out SensorFrame frame)
     {
@@ -52,9 +52,10 @@ public static class SensorFrameParser
     }
 
     /// <summary>
-    /// The parsing body, shared by both public overloads so the hot serial path never pays for a
-    /// second copy of a frame. Distances and Imu are separate arrays, not slices of one buffer —
-    /// pinned by DistancesAndImuAreSeparateArrays_NotViewsOverOneBuffer.
+    /// The parsing body. It used to be shared by two public overloads so the hot serial path never paid
+    /// for a second copy of a frame; the array overload was deleted in Phase 5 (§12.8 item 4), so this is
+    /// now the single body behind the single signature. Distances and Imu are separate arrays, not slices
+    /// of one buffer — pinned by DistancesAndImuAreSeparateArrays_NotViewsOverOneBuffer.
     /// </summary>
     private static bool TryParseValues(string line, out int[] distances, out int[]? imu)
     {

@@ -21,6 +21,39 @@ public class SensorFrameParserTests
 
     private static int[] Range16() => Enumerable.Range(100, 16).ToArray();
 
+    /// <summary>
+    /// THE ADAPTER THAT REPLACED THE DELETED PRODUCTION OVERLOAD (§12.8 item 4).
+    ///
+    /// SensorFrameParser used to carry two TryParse signatures: the original `out int[], out int[]?`
+    /// one, and the `out SensorFrame` one added in Phase 3 (§9.7). The array overload had ZERO
+    /// production call sites - SerialSensorStream and ReplaySensorStream both use the frame overload,
+    /// and MainWindow never names the parser at all - against 28 call sites in this file. Its own doc
+    /// comment said "kept for one phase and deleted in Phase 5", and Phase 5 is where it was deleted.
+    ///
+    /// WHY THE ASSERTIONS BELOW KEEP THEIR ORIGINAL WORDING. Every characterization assertion here -
+    /// the accepted shapes, the rejections, the out-param reset, Assert.Null(imu), Assert.Empty(distances) -
+    /// is about the parsing body, TryParseValues, which neither moved nor changed. Rewriting 28
+    /// assertions into frame-shaped form (frame.Distances.IsEmpty instead of Assert.Empty(distances))
+    /// would have traded a set of passing, meaningful tests for a set of passing, restated tests, for no
+    /// gain in coverage. This adapter reproduces the array/null shape the deleted overload produced, on
+    /// top of the frame overload, using only facts the frame overload's own tests already pin:
+    /// Distances and Imu are separate arrays, and a frame without IMU reports HasImu false with an empty
+    /// Imu. On rejection the frame is default, so distances is empty and imu is null - which is what
+    /// OnRejection_OutParamsAreReset_NotLeftStaleFromThePreviousFrame then checks.
+    ///
+    /// WHAT IS NO LONGER ASSERTED, STATED RATHER THAN HIDDEN: nothing here can any longer prove that
+    /// the two overloads agreed, because only one exists. The shape table that comparison used to check
+    /// is asserted directly instead by TheSingleOverload_AcceptsAndRejectsExactlyTheDocumentedShapes.
+    /// </summary>
+    private static bool TryParseLegacy(string line, out int[] distances, out int[]? imu)
+    {
+        bool ok = SensorFrameParser.TryParse(line, out SensorFrame frame);
+
+        distances = frame.Distances.ToArray();
+        imu = frame.HasImu ? frame.Imu.ToArray() : null;
+        return ok;
+    }
+
     // -----------------------------------------------------------------------------------------
     // The four legal frame shapes.
     // -----------------------------------------------------------------------------------------
@@ -30,7 +63,7 @@ public class SensorFrameParserTests
     {
         int[] values = Range16();
 
-        bool ok = SensorFrameParser.TryParse(Line(values), out int[] distances, out int[]? imu);
+        bool ok = TryParseLegacy(Line(values), out int[] distances, out int[]? imu);
 
         Assert.True(ok);
         Assert.Equal(values, distances);
@@ -42,7 +75,7 @@ public class SensorFrameParserTests
     {
         int[] values = Enumerable.Range(100, 64).ToArray();
 
-        bool ok = SensorFrameParser.TryParse(Line(values), out int[] distances, out int[]? imu);
+        bool ok = TryParseLegacy(Line(values), out int[] distances, out int[]? imu);
 
         Assert.True(ok);
         Assert.Equal(values, distances);
@@ -59,7 +92,7 @@ public class SensorFrameParserTests
     {
         int[] values = Enumerable.Range(100, 25).ToArray();
 
-        bool ok = SensorFrameParser.TryParse(Line(values), out int[] distances, out int[]? imu);
+        bool ok = TryParseLegacy(Line(values), out int[] distances, out int[]? imu);
 
         Assert.True(ok);
         Assert.Equal(16, distances.Length);
@@ -73,7 +106,7 @@ public class SensorFrameParserTests
     {
         int[] values = Enumerable.Range(100, 73).ToArray();
 
-        bool ok = SensorFrameParser.TryParse(Line(values), out int[] distances, out int[]? imu);
+        bool ok = TryParseLegacy(Line(values), out int[] distances, out int[]? imu);
 
         Assert.True(ok);
         Assert.Equal(values[..64], distances);
@@ -86,7 +119,7 @@ public class SensorFrameParserTests
     {
         int[] values = Enumerable.Range(100, 25).ToArray();
 
-        Assert.True(SensorFrameParser.TryParse(Line(values), out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(Line(values), out int[] distances, out int[]? imu));
         Assert.NotNull(imu);
 
         Assert.Equal(values[..16], distances);
@@ -118,7 +151,7 @@ public class SensorFrameParserTests
     {
         string line = string.Join(separator, Range16());
 
-        bool ok = SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu);
+        bool ok = TryParseLegacy(line, out int[] distances, out int[]? imu);
 
         Assert.True(ok);
         Assert.Equal(16, distances.Length);
@@ -130,7 +163,7 @@ public class SensorFrameParserTests
     {
         string line = "100,101;102 103\t104,105;106 107\t108,109;110 111\t112,113;114 115";
 
-        Assert.True(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Equal(Range16(), distances);
         Assert.Null(imu);
     }
@@ -142,7 +175,7 @@ public class SensorFrameParserTests
         // frame would be rejected as an illegal count instead of accepted.
         string line = "100,,101;;;102   103\t\t104,105,106,107,108,109,110,111,112,113,114,,115";
 
-        Assert.True(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Equal(Range16(), distances);
     }
 
@@ -153,7 +186,7 @@ public class SensorFrameParserTests
     [InlineData("\t100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115\t")]
     public void LeadingAndTrailingWhitespace_IsTrimmed(string line)
     {
-        Assert.True(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Equal(16, distances.Length);
         Assert.Equal(115, distances[15]);
     }
@@ -163,7 +196,7 @@ public class SensorFrameParserTests
     {
         string line = " 100 , 101 , 102 , 103 , 104 , 105 , 106 , 107 , 108 , 109 , 110 , 111 , 112 , 113 , 114 , 115 ";
 
-        Assert.True(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Equal(Range16(), distances);
     }
 
@@ -182,7 +215,7 @@ public class SensorFrameParserTests
     [InlineData("\t\t , , \t")]
     public void EmptyOrSeparatorOnlyLine_IsRejected(string line)
     {
-        bool ok = SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu);
+        bool ok = TryParseLegacy(line, out int[] distances, out int[]? imu);
 
         Assert.False(ok);
         Assert.Empty(distances);
@@ -193,7 +226,7 @@ public class SensorFrameParserTests
     public void NullLine_IsRejectedWithoutThrowing()
     {
         // string.IsNullOrWhiteSpace(null) is true, so this is a rejection rather than a NullReferenceException.
-        bool ok = SensorFrameParser.TryParse(null!, out int[] distances, out int[]? imu);
+        bool ok = TryParseLegacy(null!, out int[] distances, out int[]? imu);
 
         Assert.False(ok);
         Assert.Empty(distances);
@@ -206,7 +239,7 @@ public class SensorFrameParserTests
     [InlineData("100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,x")]
     public void AnyUnparseableToken_RejectsTheWholeFrame_AndLeavesDistancesEmpty(string line)
     {
-        bool ok = SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu);
+        bool ok = TryParseLegacy(line, out int[] distances, out int[]? imu);
 
         Assert.False(ok);
         Assert.Empty(distances);
@@ -222,7 +255,7 @@ public class SensorFrameParserTests
         // This is the hole that a stricter framing layer (Phase 3 LineFramer) should close.
         string line = "100,101,102,103,104,105,106,107,108,109,110,111,112,113,1 15";
 
-        Assert.True(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Equal(16, distances.Length);
         Assert.Equal(Enumerable.Range(100, 14).ToArray(), distances[..14]);
         Assert.Equal(1, distances[14]);  // was meant to be 114
@@ -242,7 +275,7 @@ public class SensorFrameParserTests
     [InlineData(100)]
     public void IllegalValueCounts_AreRejected(int count)
     {
-        bool ok = SensorFrameParser.TryParse(LineOfCount(count), out int[] distances, out int[]? imu);
+        bool ok = TryParseLegacy(LineOfCount(count), out int[] distances, out int[]? imu);
 
         Assert.False(ok);
         Assert.Empty(distances);
@@ -259,7 +292,7 @@ public class SensorFrameParserTests
     {
         // NumberStyles.Integer: no decimal point, no exponent, no group separator, no hex prefix,
         // and int range is enforced.
-        Assert.False(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.False(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Empty(distances);
     }
 
@@ -272,7 +305,7 @@ public class SensorFrameParserTests
         // valid frame. Worth knowing before the firmware contract is documented in Phase 3.
         string line = "1,000,101,102,103,104,105,106,107,108,109,110,111,112,113,114";
 
-        Assert.True(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Equal(16, distances.Length);
         Assert.Equal(1, distances[0]);
         Assert.Equal(0, distances[1]);
@@ -291,7 +324,7 @@ public class SensorFrameParserTests
         // are a firmware error, the fix belongs in the parser and this is the test that must change.
         string line = Line(-5, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115);
 
-        Assert.True(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Equal(-5, distances[0]);
     }
 
@@ -300,7 +333,7 @@ public class SensorFrameParserTests
     {
         string line = "+100,0101,000000102,103,104,105,106,107,108,109,110,111,112,113,114,115";
 
-        Assert.True(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Equal(100, distances[0]);
         Assert.Equal(101, distances[1]);
         Assert.Equal(102, distances[2]);
@@ -311,7 +344,7 @@ public class SensorFrameParserTests
     {
         string line = Line(0, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, int.MaxValue);
 
-        Assert.True(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Equal(0, distances[0]);
         Assert.Equal(int.MaxValue, distances[15]);
     }
@@ -321,7 +354,7 @@ public class SensorFrameParserTests
     {
         string line = Line(int.MinValue, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115);
 
-        Assert.True(SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(line, out int[] distances, out int[]? imu));
         Assert.Equal(int.MinValue, distances[0]);
     }
 
@@ -344,19 +377,19 @@ public class SensorFrameParserTests
 
             // A comma-separated line must parse identically in every culture, including cultures
             // where ',' is the decimal separator.
-            Assert.True(SensorFrameParser.TryParse(Line(100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115),
+            Assert.True(TryParseLegacy(Line(100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115),
                 out int[] distances, out _));
             Assert.Equal(Range16(), distances);
 
             // A negative value must still parse under cultures with different number formatting.
-            Assert.True(SensorFrameParser.TryParse(Line(-5, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115),
+            Assert.True(TryParseLegacy(Line(-5, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115),
                 out int[] negative, out _));
             Assert.Equal(-5, negative[0]);
 
             // A culture that uses space as a group separator must NOT reinterpret "1 000" as 1000:
             // space is a frame separator here, so it yields two zone values (1 and 0). 14 further
             // values make 16 tokens in total.
-            Assert.True(SensorFrameParser.TryParse("1 000,101,102,103,104,105,106,107,108,109,110,111,112,113,114",
+            Assert.True(TryParseLegacy("1 000,101,102,103,104,105,106,107,108,109,110,111,112,113,114",
                 out int[] spaced, out _));
             Assert.Equal(16, spaced.Length);
             Assert.Equal(1, spaced[0]);
@@ -375,7 +408,7 @@ public class SensorFrameParserTests
     [Fact]
     public void DistancesAndImuAreSeparateArrays_NotViewsOverOneBuffer()
     {
-        Assert.True(SensorFrameParser.TryParse(LineOfCount(25), out int[] distances, out int[]? imu));
+        Assert.True(TryParseLegacy(LineOfCount(25), out int[] distances, out int[]? imu));
         Assert.NotNull(imu);
 
         // Mutating one must not affect the other. If Phase 2 switches to ReadOnlyMemory over a shared
@@ -390,11 +423,11 @@ public class SensorFrameParserTests
     [Fact]
     public void OnRejection_OutParamsAreReset_NotLeftStaleFromThePreviousFrame()
     {
-        Assert.True(SensorFrameParser.TryParse(LineOfCount(16), out int[] good, out int[]? goodImu));
+        Assert.True(TryParseLegacy(LineOfCount(16), out int[] good, out int[]? goodImu));
         Assert.Equal(16, good.Length);
 
         // A bad call must reset the out params rather than leaving the previous frame in place.
-        Assert.False(SensorFrameParser.TryParse("nonsense", out int[] bad, out int[]? badImu));
+        Assert.False(TryParseLegacy("nonsense", out int[] bad, out int[]? badImu));
         Assert.Empty(bad);
         Assert.Null(badImu);
     }
@@ -403,7 +436,7 @@ public class SensorFrameParserTests
     public void AFrameWithImuThatIsRejected_LeavesNoPartialImuBehind()
     {
         // 25 tokens but the last one is garbage: neither distances nor imu may be partially populated.
-        Assert.False(SensorFrameParser.TryParse(LineOfCount(24) + ",x", out int[] distances, out int[]? imu));
+        Assert.False(TryParseLegacy(LineOfCount(24) + ",x", out int[] distances, out int[]? imu));
         Assert.Empty(distances);
         Assert.Null(imu);
     }
@@ -412,39 +445,45 @@ public class SensorFrameParserTests
     // The SensorFrame overload added in Phase 3 (§9.7, deferred from Phase 2 step 2d).
     //
     // These exist because ISensorStream.FrameReceived is the first consumer of the frame model, and
-    // a type nothing tests is a type nothing understands. The overload must agree with the out int[]
-    // overload it was derived from on every shape the parser accepts or rejects - which is what these
-    // assert, pair by pair, rather than re-deriving the rules from the source.
+    // a type nothing tests is a type nothing understands. They used to assert that this overload
+    // agreed with the out int[] overload it was derived from, shape by shape. That comparison became
+    // void when Phase 5 deleted the array overload (§12.8 item 4) - there is now one signature, so
+    // there is nothing left for two signatures to disagree about. What replaces it is the shape table
+    // asserted directly.
     // -----------------------------------------------------------------------------------------
 
     [Fact]
-    public void SensorFrameOverload_AcceptsAndRejectsExactlyWhatTheArrayOverloadDoes()
+    public void TheSingleOverload_AcceptsAndRejectsExactlyTheDocumentedShapes()
     {
-        // If the two overloads ever diverge on a shape, the App (still on out int[]) and the
-        // transport (on SensorFrame) would disagree about whether a line is a frame.
-        string[] lines =
+        // Every shape the parser is documented to accept, and every shape it is documented to reject,
+        // asserted against the one overload that exists - including the two quirks (25 and 73 values)
+        // and the "1 15" hole that ASpaceInsideANumber_SplitsItIntoTwoTokens_AndCorruptsTheFrame
+        // characterizes. A rejected line must leave a default frame, which is what
+        // SensorFrameOverload_OnRejection_FrameIsDefault_NotPartiallyPopulated checks in detail.
+        (string Line, bool Accepted, int Zones, bool HasImu)[] cases =
         [
-            LineOfCount(16), LineOfCount(64), LineOfCount(25), LineOfCount(73),
-            "", " ", ",,,", "nonsense", LineOfCount(17), LineOfCount(24) + ",x",
-            "100,101,102,103,104,105,106,107,108,109,110,111,112,113,1 15",
+            (LineOfCount(16), true, 16, false),
+            (LineOfCount(64), true, 64, false),
+            (LineOfCount(25), true, 16, true),
+            (LineOfCount(73), true, 64, true),
+            ("", false, 0, false),
+            (" ", false, 0, false),
+            (",,,", false, 0, false),
+            ("nonsense", false, 0, false),
+            (LineOfCount(17), false, 0, false),
+            (LineOfCount(24) + ",x", false, 0, false),
+            ("100,101,102,103,104,105,106,107,108,109,110,111,112,113,1 15", true, 16, false),
         ];
 
-        foreach (string line in lines)
+        foreach ((string line, bool accepted, int zones, bool hasImu) in cases)
         {
-            bool viaArray = SensorFrameParser.TryParse(line, out int[] distances, out int[]? imu);
-            bool viaFrame = SensorFrameParser.TryParse(line, out SensorFrame frame);
+            bool ok = SensorFrameParser.TryParse(line, out SensorFrame frame);
 
-            Assert.Equal(viaArray, viaFrame);
-
-            if (!viaArray)
-            {
-                continue;
-            }
-
-            Assert.Equal(distances, frame.Distances.ToArray());
-            Assert.Equal(imu ?? [], frame.Imu.ToArray());
-            Assert.Equal(distances.Length, frame.ZoneCount);
-            Assert.Equal(imu is not null, frame.HasImu);
+            Assert.Equal(accepted, ok);
+            Assert.Equal(zones, frame.ZoneCount);
+            Assert.Equal(zones, frame.Distances.Length);
+            Assert.Equal(hasImu, frame.HasImu);
+            Assert.Equal(hasImu ? 9 : 0, frame.Imu.Length);
         }
     }
 
