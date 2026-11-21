@@ -135,6 +135,28 @@ namespace EchoEnvironment
         /// Takes Core's Mat3 and converts to WPF's Matrix3D exactly once, here. The angle readout
         /// below reads Mat3 directly: the angles are a property of the orientation, not of whichever
         /// matrix type the UI happens to render with.
+        ///
+        /// DEFECT D1, FIXED AT PHASE 6a. The three expressions below were each physically correct and
+        /// the variable names were correct; only the two printed labels were swapped — the readout
+        /// printed the roll value under "Pitch" and the elevation value under "Roll". The fix is the
+        /// format string, and nothing else: changing an expression here would change what is measured,
+        /// which is a different change from naming it correctly.
+        ///
+        /// WHY THE EXPRESSIONS ARE NOT MERELY RENAMED. `asin(-M32)` is the elevation of the sensor's
+        /// look direction above horizontal — a genuine pitch. `atan2(M12, M22)` is the angle of world up
+        /// projected into the sensor's own XY plane, i.e. image roll: rotation about the sensor's own
+        /// optical (-Z) axis. MIGRATION_PLAN 6a originally described the second one as "rotation about
+        /// the up axis"; §7 finding 3 corrected that, and
+        /// RollAboutOpticalAxis_DoesNotChangeElevation_AndIsNotRotationAboutUp is the test that proves
+        /// the correction, because a board rolled about its optical axis while level is NOT rotated about
+        /// the world up axis and still reads 30 degrees.
+        ///
+        /// THE CONDITIONING CAVEAT, WHICH A LABEL FIX DOES NOT TOUCH. `atan2(M12, M22)` amplifies
+        /// accelerometer noise by 1 / hypot(M12, M22). On the captured session that pair never exceeds
+        /// 0.19 in magnitude (CapturedLog_SensorPointsAlmostStraightDown_WhichIsWhereTheAngleReadoutBreaks),
+        /// so the Roll figure amplifies noise more than 5x and approaches the point where the angle is
+        /// undefined outright — the gimbal-lock signature of an asin decomposition with M32 near 1. The
+        /// labels are now correct; the number under "Roll" is still the least trustworthy one on screen.
         /// </summary>
         public void SetOrientation(Mat3 rotation)
         {
@@ -149,7 +171,10 @@ namespace EchoEnvironment
 
             double pitch = Math.Asin(Math.Clamp(-rotation.M32, -1, 1)) * 180.0 / Math.PI;
             double roll = Math.Atan2(rotation.M12, rotation.M22) * 180.0 / Math.PI;
-            OrientationText.Text = $"Orientation\nHeading: {heading,6:0.0}°\nPitch:   {roll,6:0.0}°\nRoll:    {pitch,6:0.0}°";
+
+            // D1 was here: `Pitch: {roll}` and `Roll: {pitch}`. Each label now prints the value named by
+            // the variable of the same name, which is the whole of the fix.
+            OrientationText.Text = $"Orientation\nHeading: {heading,6:0.0}°\nPitch:   {pitch,6:0.0}°\nRoll:    {roll,6:0.0}°";
         }
 
         private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)

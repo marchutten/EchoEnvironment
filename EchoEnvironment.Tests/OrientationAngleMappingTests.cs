@@ -1,4 +1,5 @@
-﻿using EchoEnvironment.Core;
+﻿using System.IO;
+using EchoEnvironment.Core;
 using Xunit;
 
 namespace EchoEnvironment.Tests;
@@ -8,16 +9,16 @@ namespace EchoEnvironment.Tests;
 /// defect D1 (the pitch/roll label swap) is fixed as a deliberate, auditable change in Phase 6a
 /// instead of being discovered by eye.
 ///
-/// MainWindow.SetOrientation today computes:
+/// MainWindow.SetOrientation computes:
 ///     heading = atan2(-M31, M33)
 ///     pitch   = asin(clamp(-M32))
 ///     roll    = atan2(M12, M22)
-/// and prints them as:
-///     "Pitch: {roll}"   "Roll: {pitch}"
+/// and, since Phase 6a, prints them as:
+///     "Pitch: {pitch}"   "Roll: {roll}"
 ///
 /// FINDING (and a correction to the migration plan's own description of D1): the three
 /// expressions are each physically correct, and the variable NAMES are correct — only the two
-/// labels are swapped.
+/// labels were swapped.
 ///
 ///   asin(-M32)      = elevation of the look direction above horizontal.
 ///                     Column 3 of the matrix is world south in sensor coordinates, so M32 is the
@@ -30,7 +31,7 @@ namespace EchoEnvironment.Tests;
 ///                     wrong — see RollAboutOpticalAxis_DoesNotChangeElevation_AndIsNotRotationAboutUp.
 ///   atan2(-M31, M33) = compass heading of the look direction, 0 = north, 90 = east. Correct.
 ///
-/// So the fix is a two-token change in the format string, and these tests are what make it safe.
+/// So the fix was a two-token change in the format string, and these tests are what made it safe.
 ///
 /// PHASE 2 NOTE: these expressions now read Core's Mat3 directly, which is what they should always
 /// have done - the angles are a property of the orientation, not of WPF's matrix type.
@@ -183,43 +184,59 @@ public class OrientationAngleMappingTests
     }
 
     /// <summary>
-    /// CHARACTERIZATION OF DEFECT D1. Asserts the CURRENT (wrong) pairing of labels to values,
-    /// exactly as MainWindow formats it, so that Phase 6a's fix is a visible red/green change
-    /// instead of a silent edit. When the labels are corrected, this test must be updated to expect
-    /// the corrected pairing — that update is the audit trail.
+    /// THE AUDIT TRAIL FOR PHASE 6a. This test was written to assert the WRONG pairing —
+    /// "Pitch: {roll}" then "Roll: {pitch}" — so that the fix would show up as a red/green change
+    /// rather than as a silent edit. Its own doc comment said: "When the labels are corrected, this
+    /// test must be updated to expect the corrected pairing — that update is the audit trail."
+    ///
+    /// That update is this test. It now reads MainWindow's CURRENT format string and asserts the
+    /// pairing it produces, and it keeps the two poses that discriminate the pairing at all: a board
+    /// rolled 30° about its optical axis (roll 30, elevation 0) and a board pitched up 36.87° with no
+    /// roll (roll 0, elevation 36.87). Under the old labels those two boards printed their two numbers
+    /// the wrong way round; under the current labels each prints its own.
+    ///
+    /// WHY THE OLD ASSERTIONS ARE KEPT IN THE MESSAGES RATHER THAN DELETED: the point of the test is
+    /// that the two quantities are DIFFERENT, because if they agreed the swap would have been harmless
+    /// and no test could have caught it. That is still the load-bearing claim, so it is still asserted.
     ///
     /// Asserted numerically rather than by comparing formatted text: atan2 can return -0.0, which
     /// renders as "-0.0" and would make a string comparison fail for a reason unrelated to the
     /// defect. The pairing of label to VALUE is what matters.
     /// </summary>
     [Fact]
-    public void DefectD1_CurrentFormatStringPrintsRollUnderThePitchLabel()
+    public void DefectD1_IsFixed_FormatStringPrintsEachAngleUnderItsOwnLabel()
     {
         Mat3 rolled = MatrixFor(Rolled30);     // physically: roll 30, elevation 0
         Mat3 pitched = MatrixFor(PitchedUp345); // physically: roll 0, elevation 36.87
 
-        // MainWindow's format string, reproduced verbatim:
-        //   "Pitch: {roll}" then "Roll: {pitch}"
-        // So the number printed under "Pitch" is RollVariable() and the number under "Roll" is
-        // PitchVariable().
-        AssertMath.Close(30.0, RollVariable(rolled), Tolerance, "value printed under the Pitch label for a rolled board");
-        AssertMath.Close(0.0, PitchVariable(rolled), Tolerance, "value printed under the Roll label for a rolled board");
+        // MainWindow's format string, current (MainWindow.xaml.cs, SetOrientation):
+        //   "Pitch: {pitch}" then "Roll: {roll}"
+        // So the number printed under "Pitch" is PitchVariable() and the number under "Roll" is
+        // RollVariable().
+        AssertMath.Close(0.0, PitchVariable(rolled), Tolerance, "value printed under the Pitch label for a rolled board");
+        AssertMath.Close(30.0, RollVariable(rolled), Tolerance, "value printed under the Roll label for a rolled board");
 
-        AssertMath.Close(0.0, RollVariable(pitched), Tolerance, "value printed under the Pitch label for a pitched board");
-        AssertMath.Close(Math.Asin(0.6) * 180.0 / Math.PI, PitchVariable(pitched), Tolerance, "value printed under the Roll label for a pitched board");
+        AssertMath.Close(Math.Asin(0.6) * 180.0 / Math.PI, PitchVariable(pitched), Tolerance, "value printed under the Pitch label for a pitched board");
+        AssertMath.Close(0.0, RollVariable(pitched), Tolerance, "value printed under the Roll label for a pitched board");
 
-        // The correct pairing is provably different from the printed one, so Phase 6a cannot be a no-op:
-        // the number that SHOULD appear under "Pitch" is the one currently printed under "Roll".
+        // The two expressions measure different quantities, which is what made the swap a defect rather
+        // than a cosmetic choice. If this ever stops being true, the labels are not distinguishable and
+        // this test has nothing to assert.
         Assert.True(Math.Abs(RollVariable(rolled) - PitchVariable(rolled)) > 1.0,
-            "the two expressions must measure different quantities or the label swap would be harmless");
+            "the two expressions must measure different quantities or the label swap would have been harmless");
         Assert.True(Math.Abs(RollVariable(pitched) - PitchVariable(pitched)) > 1.0,
-            "the two expressions must measure different quantities or the label swap would be harmless");
+            "the two expressions must measure different quantities or the label swap would have been harmless");
     }
 
     /// <summary>
-    /// The corrected mapping, written out now so Phase 6a has a target to implement against.
-    /// Currently unenforceable against MainWindow (it lives in the UI layer, which the tests cannot
-    /// instantiate); this documents the intended end state.
+    /// The corrected mapping, written out before Phase 6a as a target to implement against, and now the
+    /// assertion that the implementation meets it.
+    ///
+    /// WHAT THIS TEST ADDS ON TOP OF DefectD1_IsFixed. That test reads the pairing out of the format
+    /// string's variable names; this one asserts the physical meaning of each label against independently
+    /// known poses. A format string that paired each label with the variable of the same name would pass
+    /// the other test even if the variables themselves had been given the wrong expressions, so the
+    /// physical assertion is the one that cannot be satisfied by a rename.
     /// </summary>
     [Fact]
     public void CorrectedMapping_PitchIsElevationAndRollIsOpticalAxisRotation()
@@ -233,6 +250,79 @@ public class OrientationAngleMappingTests
 
         AssertMath.Close(Math.Asin(0.6) * 180.0 / Math.PI, PitchVariable(pitched), Tolerance, "corrected Pitch for a pitched board");
         AssertMath.Close(0.0, RollVariable(pitched), Tolerance, "corrected Roll for a pitched board");
+    }
+
+    /// <summary>
+    /// THE GUARD THAT MAKES 6a FALSIFIABLE AGAINST THE PRODUCTION FILE.
+    ///
+    /// Every other test in this file mirrors the three expressions as private copies. That is a
+    /// deliberate design — the tests cannot instantiate a Window — but it has a hole: a test that
+    /// reproduces the production expressions proves the expressions are self-consistent, not that the
+    /// app contains them. If MainWindow's format string were reverted to `Pitch: {roll}`, every test in
+    /// this file would still pass.
+    ///
+    /// So this test reads the format string out of MainWindow.xaml.cs and asserts the pairing directly.
+    /// It is the only test in the suite that can fail if 6a is undone.
+    ///
+    /// WHY IT IS A SOURCE-TEXT ASSERTION AND WHAT THAT COSTS. MainWindow cannot be constructed from a
+    /// test (StaRunner exists for WPF objects, but a Window needs a Dispatcher and a real application).
+    /// Reading the file is the same technique ArchitectureInvariantTests, FrameCoalescerTests and
+    /// OrbitCameraControllerTests already use for the same reason. It is brittle to reformatting and it
+    /// is not a substitute for the physical assertions above; it is a tripwire on the one line 6a
+    /// changed.
+    /// </summary>
+    [Fact]
+    public void MainWindowFormatStringPairsEachLabelWithTheVariableOfTheSameName()
+    {
+        string appSource = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "EchoEnvironment", "MainWindow.xaml.cs"));
+
+        // The current pairing: Pitch <- pitch, Roll <- roll.
+        Assert.Contains(@"Pitch:   {pitch,6:0.0}°", appSource, StringComparison.Ordinal);
+        Assert.Contains(@"Roll:    {roll,6:0.0}°", appSource, StringComparison.Ordinal);
+
+        // The D1 pairing, absent. Asserting the absence is the point: without these two lines the test
+        // would pass against either build, which is the decoration §4's
+        // "a test that asserts nothing is mistaken for protection" entry exists to prevent.
+        Assert.DoesNotContain(@"Pitch:   {roll,6:0.0}°", appSource, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"Roll:    {pitch,6:0.0}°", appSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The expressions themselves are unchanged by 6a, and that is a claim worth pinning: a "label fix"
+    /// that quietly altered asin(-M32) or atan2(M12, M22) would be a measurement change wearing a
+    /// correction's clothes. Asserted against the production file so the arithmetic is checked, not
+    /// remembered.
+    /// </summary>
+    [Fact]
+    public void TheAngleExpressionsThemselvesAreUnchangedByTheLabelFix()
+    {
+        string appSource = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "EchoEnvironment", "MainWindow.xaml.cs"));
+
+        Assert.Contains("double pitch = Math.Asin(Math.Clamp(-rotation.M32, -1, 1)) * 180.0 / Math.PI;", appSource, StringComparison.Ordinal);
+        Assert.Contains("double roll = Math.Atan2(rotation.M12, rotation.M22) * 180.0 / Math.PI;", appSource, StringComparison.Ordinal);
+        Assert.Contains("double heading = Math.Atan2(-rotation.M31, rotation.M33) * 180.0 / Math.PI;", appSource, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Walks up from this test assembly to the repository root, the same anchor
+    /// ArchitectureInvariantTests and FrameCoalescerTests use. Duplicated rather than shared for the reason
+    /// those files already record: making one guard depend on another test class's private helper couples
+    /// unrelated guards to one file's internals.
+    /// </summary>
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(Path.GetDirectoryName(typeof(OrientationAngleMappingTests).Assembly.Location)!);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EchoEnvironment.Tests.csproj")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.NotNull(directory);
+
+        string? repoRoot = directory!.Parent?.FullName;
+        Assert.NotNull(repoRoot);
+
+        return repoRoot!;
     }
 
     private static Pose PoseByName(string name) => name switch
