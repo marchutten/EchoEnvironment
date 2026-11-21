@@ -47,8 +47,23 @@ public sealed class OrientationFilter
     /// <summary>
     /// imu: gyro x y z, accel x y z, mag x y z (raw counts). dt in seconds.
     /// Returns a matrix that rotates sensor-frame points into the world frame (X east, Y up, -Z north).
+    ///
+    /// THE PARAMETER IS A SPAN, NOT AN ARRAY (MIGRATION_PLAN §12.8 item 4). MainWindow used to write
+    /// `frame.Imu.ToArray()` on every frame that carried IMU data, solely because this signature asked for
+    /// int[] while SensorFrame stores the nine counts as ReadOnlyMemory. The array was never stored, never
+    /// returned and never enumerated here - it is read as imu[0]..imu[8] into three Vec3 copies and then
+    /// abandoned - so the copy existed only to satisfy the signature. A span reads the frame's own storage
+    /// in place.
+    ///
+    /// WHY A SPAN CANNOT BE MISUSED HERE. The nine values are copied into gyro/accel/mag on the first three
+    /// lines and the parameter is never touched again, so nothing can outlive the caller's buffer. There is
+    /// no field of type ReadOnlySpan in this class and adding one would not compile.
+    ///
+    /// THE INDEXING IS UNCHANGED, AND THAT IS THE POINT. imu[0]..imu[8] read identically against a span. No
+    /// arithmetic, threshold, clamp or ordering in this method was altered; only the type that carries the
+    /// nine counts into them.
     /// </summary>
-    public Mat3 Update(int[] imu, double dt)
+    public Mat3 Update(ReadOnlySpan<int> imu, double dt)
     {
         var gyro = new Vec3(imu[0], imu[1], imu[2]);
         var accel = new Vec3(imu[3], imu[4], imu[5]);

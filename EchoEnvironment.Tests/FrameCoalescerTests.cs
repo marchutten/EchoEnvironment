@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using EchoEnvironment.Core;
+using EchoEnvironment.Rendering;
 using Xunit;
 
 namespace EchoEnvironment.Tests;
@@ -373,6 +374,149 @@ public class FrameCoalescerTests
             .GetField("DefaultRenderRateHz", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Static)!;
 
         Assert.Equal(60, (int)field.GetValue(null)!);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // §12.8 item 4 — the half of Phase 5 commit 1 did not reach: the per-frame ToArray() copies.
+    // -----------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// THE RENDER PATH ALLOCATES NOTHING FOR THE FRAME'S OWN VALUES.
+    ///
+    /// WHY THIS IS A SOURCE-TEXT GUARD AND NOT A MEASUREMENT. RenderFrame is private on a Window that no
+    /// test can construct, and "this method allocates zero bytes per frame" is not observable from a unit
+    /// test in a way that would survive the GC. What IS observable, and what would have made the whole
+    /// change invisible if left unguarded, is the two calls that used to be here: `frame.Imu.ToArray()` and
+    /// `frame.Distances.ToArray()`. SensorFrame stores both as ReadOnlyMemory, so passing them to an int[]
+    /// parameter meant copying 9 and 64 integers on every rendered frame purely to satisfy a signature.
+    /// Asserting their absence in the extracted method body is the claim that can fail.
+    ///
+    /// WHY THE DOC COMMENT IS NOT A PROBLEM HERE. ExtractMethod starts at the signature and brace-matches
+    /// the body, so RenderFrame's own explanation of what it used to do — which names ToArray() twice — is
+    /// not part of what is searched. That is also why the assertion is scoped to one method rather than to
+    /// the file: the file legitimately mentions the removed calls in prose.
+    /// </summary>
+    [Fact]
+    public void RenderFrameNoLongerCopiesTheFramesOwnArrays()
+    {
+        string code = File.ReadAllText(Path.Combine(FindAppSourceDirectory(), "MainWindow.xaml.cs"));
+
+        string renderFrame = ExtractMethod(code, "private void RenderFrame");
+
+        Assert.DoesNotContain(".ToArray()", renderFrame, StringComparison.Ordinal);
+
+        // And positively, that it reads the frame's storage in place rather than having simply deleted the
+        // values along with the copies.
+        Assert.Contains("frame.Imu.Span", renderFrame, StringComparison.Ordinal);
+        Assert.Contains("frame.Distances.Span", renderFrame, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE SIGNATURES THAT MADE THE COPIES NECESSARY ARE GONE.
+    ///
+    /// Removing ToArray() from RenderFrame alone would not have been a fix: it would have failed to compile
+    /// until the consumers stopped asking for int[]. Asserting the parameter types from the compiled
+    /// assemblies is what stops the copies reappearing "to fix a build error" — the signature is the reason
+    /// they existed, so the signature is what has to stay changed.
+    /// </summary>
+    [Fact]
+    public void TheConsumersTakeSpans_NotArrays()
+    {
+        MethodInfo updateFrame = typeof(ZoneRenderer).GetMethod("UpdateFrame")!;
+        Assert.Equal(typeof(ReadOnlySpan<int>), updateFrame.GetParameters()[0].ParameterType);
+
+        MethodInfo filterUpdate = typeof(OrientationFilter).GetMethod("Update")!;
+        Assert.Equal(typeof(ReadOnlySpan<int>), filterUpdate.GetParameters()[0].ParameterType);
+    }
+
+    /// <summary>
+    /// THE STATUS LINE SAYS THE SAME THING IT SAID BEFORE.
+    ///
+    /// RenderFrame used to compute the visible-zone count and the maximum distance with LINQ over the array
+    /// (`distances.Count(d => ...)` and `distances.Max()`). A span is not IEnumerable, so those became one
+    /// explicit loop. The numbers printed are user-visible text, and a loop that gets the boundary wrong
+    /// would change the status line while every zone still rendered correctly — a regression a screenshot
+    /// would show and no existing test would catch.
+    ///
+    /// WHAT THIS CAN AND CANNOT PROVE. It cannot execute RenderFrame: it is private on a Window nothing here
+    /// can construct. What it does is hold the loop's logic and the LINQ it replaced side by side over the
+    /// same inputs, including the boundary values the app actually filters on (MinDistanceMm 20,
+    /// MaxDistanceMm 4000) and readings outside them, and assert they agree. If the loop's comparison or its
+    /// initial value is changed, the two diverge and this says so. It is a transcription check, not a
+    /// substitute for running the app, and it does not claim to have observed the status line.
+    /// </summary>
+    [Theory]
+    // All inside the band, all outside it, both boundaries exactly, and a negative reading.
+    // Deliberately NO empty case. On an empty sequence LINQ's Max() throws while the loop leaves maxMm at
+    // int.MinValue, so the two sides of the comparison below cannot both be evaluated. The input is also
+    // unreachable: IllegalValueCounts_AreRejected pins that every token count except 16, 25, 64 and 73 is
+    // rejected, and SensorFrameOverload_AcceptsAndRejectsExactlyWhatTheArrayOverloadDoes pins
+    // frame.ZoneCount to distances.Length - so a frame that reaches RenderFrame holds 16 or 64 zones.
+    [InlineData(new int[] { 1000, 1000, 1000 })]
+    [InlineData(new int[] { 10, 5000 })]
+    [InlineData(new int[] { 20, 4000 })]
+    [InlineData(new int[] { 19, 20, 4000, 4001 })]
+    [InlineData(new int[] { -500, 0, 20 })]
+    public void TheStatusLineLoopAgreesWithTheLinqItReplaced(params int[] distances)
+    {
+        // The band comes from MainWindow, not from constants declared here. A test that hard-codes 20 and
+        // 4000 keeps passing after someone changes the app's band and leaves the test's behind - which is
+        // the specific way a passing test stops meaning anything.
+        (double minMm, double maxMm) = AppVisibleBand();
+
+        int visibleLinq = distances.Count(d => d >= minMm && d <= maxMm);
+        int maxLinq = distances.Max();
+
+        ReadOnlySpan<int> span = distances;
+        int visibleLoop = 0;
+        int maxLoop = int.MinValue;
+        for (int i = 0; i < span.Length; i++)
+        {
+            int mm = span[i];
+            if (mm >= minMm && mm <= maxMm)
+            {
+                visibleLoop++;
+            }
+
+            if (mm > maxLoop)
+            {
+                maxLoop = mm;
+            }
+        }
+
+        Assert.Equal(visibleLinq, visibleLoop);
+        Assert.Equal(maxLinq, maxLoop);
+    }
+
+    /// <summary>
+    /// The band the status line counts against, pinned to the constants MainWindow declares rather than to
+    /// the numbers a test would like them to be. Read by reflection for the same reason
+    /// DefaultRenderRateIsThePlannedSixtyHertz does: these are private constants, and the only honest way to
+    /// assert a private constant is to read it from the type that declares it.
+    ///
+    /// The expected values are asserted here as well as read, so a change to the app's band fails loudly at
+    /// the point of change instead of silently moving every comparison in the test above.
+    /// </summary>
+    [Fact]
+    public void TheVisibleBandTheStatusLineCountsAgainstIsTheAppsOwnConstants()
+    {
+        (double minMm, double maxMm) = AppVisibleBand();
+
+        Assert.Equal(20.0, minMm);
+        Assert.Equal(4000.0, maxMm);
+    }
+
+    /// <summary>
+    /// MainWindow's private MinDistanceMm / MaxDistanceMm, read from the compiled type.
+    /// </summary>
+    private static (double Min, double Max) AppVisibleBand()
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Static;
+
+        FieldInfo min = typeof(MainWindow).GetField("MinDistanceMm", flags)!;
+        FieldInfo max = typeof(MainWindow).GetField("MaxDistanceMm", flags)!;
+
+        return ((double)min.GetValue(null)!, (double)max.GetValue(null)!);
     }
 
     /// <summary>

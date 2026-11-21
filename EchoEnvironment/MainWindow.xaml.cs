@@ -458,6 +458,25 @@ namespace EchoEnvironment
 
         /// <summary>
         /// The body that used to run inside Dispatcher.BeginInvoke, unchanged except for where it runs.
+        ///
+        /// NO COPIES ANY MORE (MIGRATION_PLAN §12.8 item 4 — the half of Phase 5 commit 1 did not reach).
+        /// This method used to write `frame.Imu.ToArray()` and `frame.Distances.ToArray()`: SensorFrame
+        /// stores both as ReadOnlyMemory, so passing them to an int[] parameter meant copying 9 and 64
+        /// integers on every rendered frame purely to satisfy a signature. Both consumers now take
+        /// ReadOnlySpan, so the frame's own storage is read in place and the hot path allocates nothing
+        /// for these two values.
+        ///
+        /// WHY THAT IS SAFE. A span is a window onto somebody else's storage and cannot outlive it. Here
+        /// the storage is the SensorFrame parameter, which is alive for the whole method, and nothing
+        /// downstream keeps the span: OrientationFilter.Update indexes imu[0..8] into three Vec3 copies,
+        /// and ZoneRenderer.UpdateFrame reads distances only for the duration of its own call. Neither
+        /// stores a span in a field, and neither could.
+        ///
+        /// WHY THE STATUS LINE IS NOW A LOOP. `distances.Count(d => ...)` and `distances.Max()` are LINQ
+        /// over IEnumerable, and a span is not IEnumerable. Replacing them with a loop is not a
+        /// compromise: the LINQ version allocated an enumerator and a closure over two window constants
+        /// per frame, and iterated the array twice. One pass computes both numbers. The text produced is
+        /// identical, which is what the assertions below are for.
         /// </summary>
         private void RenderFrame(SensorFrame frame)
         {
@@ -467,14 +486,28 @@ namespace EchoEnvironment
                 long now = System.Diagnostics.Stopwatch.GetTimestamp();
                 double dt = _lastImuTimestamp == 0 ? 0 : System.Diagnostics.Stopwatch.GetElapsedTime(_lastImuTimestamp, now).TotalSeconds;
                 _lastImuTimestamp = now;
-                SetOrientation(_imuFilter.Update(frame.Imu.ToArray(), dt));
+                SetOrientation(_imuFilter.Update(frame.Imu.Span, dt));
             }
 
-            // The ToArray() copy exists because ZoneRenderer.UpdateFrame still takes int[].
-            // Retargeting it to ReadOnlyMemory is Phase 5's remaining job; until then the hot path pays
-            // one small allocation per frame, which is what it paid before too.
-            int[] distances = frame.Distances.ToArray();
+            ReadOnlySpan<int> distances = frame.Distances.Span;
             _zones.UpdateFrame(distances, KeepMapCheckBox.IsChecked == true);
+
+            int visible = 0;
+            int maxMm = int.MinValue;
+            for (int i = 0; i < distances.Length; i++)
+            {
+                int mm = distances[i];
+                if (mm >= MinDistanceMm && mm <= MaxDistanceMm)
+                {
+                    visible++;
+                }
+
+                if (mm > maxMm)
+                {
+                    maxMm = mm;
+                }
+            }
+
             ReadOnlySpan<int> imu = frame.Imu.Span;
             string imuText = frame.HasImu
                 ? $" | gyro {imu[0]},{imu[1]},{imu[2]} accel {imu[3]},{imu[4]},{imu[5]} mag {imu[6]},{imu[7]},{imu[8]}"
@@ -485,7 +518,7 @@ namespace EchoEnvironment
             // with no explanation attached to it.
             long dropped = _coalescer.DroppedFrames;
             string dropText = dropped > 0 ? $" | dropped {dropped}" : string.Empty;
-            StatusText.Text = $"Frames: {_frames} ({distances.Length} zones, {distances.Count(d => d >= MinDistanceMm && d <= MaxDistanceMm)} visible, max {distances.Max()} mm){imuText}{dropText}";
+            StatusText.Text = $"Frames: {_frames} ({distances.Length} zones, {visible} visible, max {maxMm} mm){imuText}{dropText}";
         }
 
         private static TimeSpan RenderInterval(int hz) => TimeSpan.FromSeconds(1.0 / hz);

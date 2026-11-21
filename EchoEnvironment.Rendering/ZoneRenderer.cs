@@ -137,8 +137,22 @@ public sealed class ZoneRenderer
     /// the window inside a rendering class, which is a worse coupling than the one it removes: the
     /// renderer would then depend on the window's element names. A bool carries the same information
     /// with no reference at all, and it is what makes UpdateFrame callable from a test.
+    ///
+    /// THE PARAMETER IS A SPAN, NOT AN ARRAY (MIGRATION_PLAN §12.8 item 4, the half of Phase 5 that
+    /// commit 1 did not reach). It used to be int[], which forced MainWindow to write
+    /// `frame.Distances.ToArray()` on every rendered frame: SensorFrame stores its distances as
+    /// ReadOnlyMemory, so an int[] parameter meant copying 64 integers per frame purely to satisfy the
+    /// signature. A ReadOnlySpan<int> accepts the array a test already has and the span the frame already
+    /// owns, so neither side allocates.
+    ///
+    /// WHY THAT IS SAFE HERE, STATED BECAUSE SPANS HAVE A TRAP. A span is a window onto somebody else's
+    /// storage and cannot be stored in a field. That is fine and is the point: UpdateFrame reads
+    /// distances only for the duration of the call - length, per-zone lookup, the heat grid - and keeps
+    /// nothing. With keepMap the only thing that survives is the individual Vec3/mm handed to WorldMap.Add,
+    /// which is a copy of one reading, not the array. No field of ZoneRenderer holds a span, and adding one
+    /// would not compile.
     /// </summary>
-    public void UpdateFrame(int[] distances, bool keepMap)
+    public void UpdateFrame(ReadOnlySpan<int> distances, bool keepMap)
     {
         int size = distances.Length == 64 ? 8 : 4;
         UpdateHeatmap(distances, size);
@@ -210,7 +224,7 @@ public sealed class ZoneRenderer
         }
     }
 
-    private void UpdateHeatmap(int[] distances, int size)
+    private void UpdateHeatmap(ReadOnlySpan<int> distances, int size)
     {
         if (_heatGrid.Children.Count != distances.Length)
         {
