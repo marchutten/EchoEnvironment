@@ -285,6 +285,37 @@ public sealed class ZoneRenderer
         return scale;
     }
 
+    /// <summary>
+    /// Rebuilds the map bucket geometries, at most once per throttle window, and only for the buckets that
+    /// actually changed (defect D4, MIGRATION_PLAN 7).
+    ///
+    /// WHAT IT USED TO DO. Build a fresh MeshGeometry3D for every bucket, walk every accumulated entry in
+    /// the map, stamp a cube into the bucket each entry belongs to, and assign all bucket geometries - every
+    /// 150 ms, whether or not anything had changed. The entry count is bounded by the whole-degree grid
+    /// (361 x 181 = 65,341 cells) and each cube emits eight positions, so a full rebuild is on the order of
+    /// half a million positions re-emitted per tick. A stationary board with Keep-map on paid that cost
+    /// forever, and the cost grew with the map rather than with the frame.
+    ///
+    /// WHAT IT DOES NOW. WorldMap keeps a bucket -> cell -> position index and a dirty-bucket set. This
+    /// method takes the dirty set and rebuilds only those buckets. A frame that changes nothing rebuilds
+    /// nothing. A frame that moves one reading between two distance buckets rebuilds exactly two.
+    ///
+    /// THE THROTTLE IS UNCHANGED, AND DELIBERATELY SO. MapRenderIntervalMs is a behaviour with a test
+    /// (MapMeshIsRebuiltOnAThrottleNotEveryFrame) that measures the lag between a reading arriving and the
+    /// geometry showing it. D4 is about how much work a rebuild costs, not about how often one happens.
+    /// Changing both at once would make the throttle test unable to say which change it observed.
+    ///
+    /// WHY A CLEAN TICK STILL ADVANCES THE CLOCK. `_lastMapRender` is updated before the dirty check, so a
+    /// tick that rebuilds nothing still counts as a render attempt. The alternative - advancing the clock
+    /// only on a real rebuild - would let a dirty reading rebuild immediately after an idle stretch, which
+    /// makes the visible update rate depend on how long the board happened to be still. The throttle is a
+    /// rate limit on map work, and a rate limit that only ticks when there is work is not a rate limit.
+    ///
+    /// WHY ONLY THE DIRTY BUCKETS ARE TOUCHED AND NOT ALL OF THEM. The bucket models are persistent -
+    /// created once in the constructor and kept in _mapModels - so an untouched bucket keeps the geometry it
+    /// was last given. Re-assigning every bucket on every tick is what this method used to do, and it is the
+    /// half of D4 that a screenshot would never show: the same pixels, re-emitted.
+    /// </summary>
     private void RenderMapIfDue()
     {
         long now = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -294,31 +325,33 @@ public sealed class ZoneRenderer
         }
 
         _lastMapRender = now;
-        var meshes = new MeshGeometry3D[_mapModels.Length];
-        for (int b = 0; b < _mapModels.Length; b++)
+
+        int[] dirty = _map.TakeDirtyBuckets();
+        if (dirty.Length == 0)
         {
-            meshes[b] = new MeshGeometry3D();
+            return;
         }
 
-        foreach ((Vec3 position, int bucket) in _map.Entries.Values)
+        foreach (int bucket in dirty)
         {
-            MeshGeometry3D mesh = meshes[bucket];
-            int start = mesh.Positions.Count;
-            foreach (Point3D p in _cubeMesh.Positions)
+            var mesh = new MeshGeometry3D();
+
+            foreach (Vec3 position in _map.CellsInBucket(bucket).Values)
             {
-                mesh.Positions.Add(new Point3D(position.X + p.X * MapCubeScale, position.Y + p.Y * MapCubeScale, position.Z + p.Z * MapCubeScale));
+                int start = mesh.Positions.Count;
+                foreach (Point3D p in _cubeMesh.Positions)
+                {
+                    mesh.Positions.Add(new Point3D(position.X + p.X * MapCubeScale, position.Y + p.Y * MapCubeScale, position.Z + p.Z * MapCubeScale));
+                }
+
+                foreach (int i in _cubeMesh.TriangleIndices)
+                {
+                    mesh.TriangleIndices.Add(start + i);
+                }
             }
 
-            foreach (int i in _cubeMesh.TriangleIndices)
-            {
-                mesh.TriangleIndices.Add(start + i);
-            }
-        }
-
-        for (int b = 0; b < _mapModels.Length; b++)
-        {
-            meshes[b].Freeze();
-            _mapModels[b].Geometry = meshes[b];
+            mesh.Freeze();
+            _mapModels[bucket].Geometry = mesh;
         }
     }
 }

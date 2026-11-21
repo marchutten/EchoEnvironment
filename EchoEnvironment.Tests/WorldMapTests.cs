@@ -200,6 +200,216 @@ public class WorldMapTests
         Assert.Empty(map.Entries);
     }
 
+    // -----------------------------------------------------------------------------------------
+    // Defect D4 (MIGRATION_PLAN 7): the map must know which buckets changed, so a rebuild does not
+    // re-emit every bucket on every tick.
+    //
+    // WHY THESE TESTS EXIST AT ALL. The 324 tests that already passed proved the D4 rewrite did not
+    // break the map's arithmetic. They could not prove the rewrite does anything: RenderMapIfDue's cost
+    // is not observable through Count, Entries or Clear. A fix that changed nothing observable would
+    // have landed green, which is exactly the failure mode §4's "a test that asserts nothing is mistaken
+    // for protection" entry exists to warn about. These assert the dirty set directly.
+    // -----------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// THE CASE D4 IS ABOUT: a board that has not moved must mark nothing dirty.
+    ///
+    /// This is the whole saving. A stationary board with Keep-map on used to re-emit every accumulated
+    /// cube every 150 ms forever. If a repeated identical reading marked a bucket dirty, the incremental
+    /// rebuild would still walk the map on every tick and D4 would only have been renamed.
+    /// </summary>
+    [Fact]
+    public void ARepeatedIdenticalReadingMarksNothingDirty()
+    {
+        WorldMap map = New();
+
+        map.Add(new Vec3(0, 0, -1), 1000);
+        Assert.True(map.HasDirtyBuckets, "the first reading must mark its bucket dirty.");
+        Assert.NotEmpty(map.TakeDirtyBuckets());
+
+        map.Add(new Vec3(0, 0, -1), 1000);
+
+        Assert.False(map.HasDirtyBuckets,
+            "the same reading in the same cell changes nothing about the drawn map, so it must not schedule a rebuild.");
+        Assert.Empty(map.TakeDirtyBuckets());
+
+        // And the reading is still recorded exactly once.
+        Assert.Equal(1, map.Count);
+    }
+
+    /// <summary>
+    /// A reading that genuinely moved must mark its bucket dirty, or the cube on screen would go stale.
+    ///
+    /// The pair with the test above is what makes both falsifiable: one asserts the clean case is clean,
+    /// the other asserts the dirty case is dirty. Either alone would pass against a build that always
+    /// marked everything dirty, or against one that never marked anything.
+    /// </summary>
+    [Fact]
+    public void AChangedPositionInAnExistingCellMarksItsBucketDirty()
+    {
+        WorldMap map = New();
+
+        map.Add(new Vec3(0, 0, -1), 1000);
+        map.TakeDirtyBuckets();
+
+        // Same cell (due north, elevation 0), same bucket, different distance.
+        map.Add(new Vec3(0, 0, -2), 1000);
+
+        int[] dirty = map.TakeDirtyBuckets();
+        Assert.Contains(BucketOf(1000), dirty);
+        Assert.Single(dirty);
+    }
+
+    /// <summary>
+    /// THE SPECIFIC BUG THIS BRANCH EXISTS TO PREVENT: a reading that moves between distance buckets must
+    /// mark BOTH buckets dirty.
+    ///
+    /// The bucket a reading leaves has to be redrawn without it, or the cube stays stamped in the bucket it
+    /// no longer belongs to - a map that shows the same reading at two distances. A rebuild that only marks
+    /// the destination dirty produces exactly that, and it is invisible in Count and in Entries, because
+    /// both are correct; only the drawn geometry is wrong.
+    /// </summary>
+    [Fact]
+    public void AReadingThatMovesBetweenBucketsMarksTheBucketItLeaves_AndTheOneItEnters()
+    {
+        WorldMap map = New();
+
+        int leaving = BucketOf(1000);
+        int entering = BucketOf(3000);
+        Assert.NotEqual(leaving, entering);
+
+        map.Add(new Vec3(0, 0, -1), 1000);
+        map.TakeDirtyBuckets();
+
+        // Same cell (due north, elevation 0), different distance bucket.
+        map.Add(new Vec3(0, 0, -2), 3000);
+
+        int[] dirty = map.TakeDirtyBuckets();
+
+        Assert.Contains(leaving, dirty);
+        Assert.Contains(entering, dirty);
+        Assert.Equal(2, dirty.Length);
+
+        // And the map itself is consistent: one cell, filed in the new bucket.
+        Assert.Equal(1, map.Count);
+        Assert.Equal(entering, map.Entries[Key(0, 0)].Bucket);
+    }
+
+    /// <summary>
+    /// TakeDirtyBuckets CONSUMES. A getter that left the set populated would let a caller mark a bucket
+    /// clean as a separate step, and that two-step protocol can half-finish: a rebuild that throws after
+    /// taking bucket 4 but before bucket 11 would leave bucket 11 permanently unredrawn.
+    /// </summary>
+    [Fact]
+    public void TakeDirtyBucketsClearsTheSet_SoTheSameChangeIsNotRebuiltTwice()
+    {
+        WorldMap map = New();
+
+        map.Add(new Vec3(0, 0, -1), 1000);
+
+        int[] first = map.TakeDirtyBuckets();
+        Assert.NotEmpty(first);
+
+        Assert.Empty(map.TakeDirtyBuckets());
+        Assert.False(map.HasDirtyBuckets);
+    }
+
+    /// <summary>
+    /// Clear must clear the dirty set too. A map emptied but still marked dirty would schedule a rebuild
+    /// that emits nothing, and - worse - a caller that cleared and then took the dirty buckets would find
+    /// work left over from readings that no longer exist.
+    /// </summary>
+    [Fact]
+    public void ClearAlsoClearsTheDirtySet()
+    {
+        WorldMap map = New();
+
+        map.Add(new Vec3(0, 0, -1), 1000);
+        map.Add(new Vec3(1, 0, 0), 3000);
+        Assert.True(map.HasDirtyBuckets);
+
+        map.Clear();
+
+        Assert.False(map.HasDirtyBuckets);
+        Assert.Empty(map.TakeDirtyBuckets());
+        Assert.Empty(map.Entries);
+    }
+
+    /// <summary>
+    /// The bucket index must agree with Entries, cell for cell.
+    ///
+    /// WHY THIS IS NOT REDUNDANT. RenderMapIfDue now builds geometry from CellsInBucket rather than from
+    /// Entries. If the two views disagreed about which bucket a cell belongs to, the map would draw a cube
+    /// in the wrong colour - the bucket index IS the colour - while every Entries assertion still passed.
+    /// The two views are the same data reached two ways, and that is exactly the kind of duplication that
+    /// drifts.
+    /// </summary>
+    [Fact]
+    public void CellsInBucketAgreesWithEntriesForEveryCell()
+    {
+        WorldMap map = New();
+
+        map.Add(new Vec3(0, 0, -1), 1000);   // due north
+        map.Add(new Vec3(1, 0, 0), 1000);    // due east
+        map.Add(new Vec3(0, 0, 1), 3000);    // due south, different bucket
+
+        Assert.Equal(3, map.Count);
+
+        foreach ((int cell, (Vec3 position, int bucket)) in map.Entries)
+        {
+            IReadOnlyDictionary<int, Vec3> cells = map.CellsInBucket(bucket);
+
+            Assert.True(cells.ContainsKey(cell),
+                $"cell {cell} is filed in bucket {bucket} by Entries but is absent from CellsInBucket({bucket}).");
+            AssertMath.Close(position.X, cells[cell].X, AssertMath.Exact, $"cell {cell}: X agrees between the two views");
+            AssertMath.Close(position.Y, cells[cell].Y, AssertMath.Exact, $"cell {cell}: Y agrees between the two views");
+            AssertMath.Close(position.Z, cells[cell].Z, AssertMath.Exact, $"cell {cell}: Z agrees between the two views");
+        }
+    }
+
+    /// <summary>
+    /// A bucket with no readings answers as empty, and an empty bucket must not allocate a dictionary.
+    ///
+    /// The allocation half matters because RenderMapIfDue asks this question for every dirty bucket on
+    /// every tick, and most buckets are usually empty: the app uses 16 buckets and a single-distance frame
+    /// fills one.
+    /// </summary>
+    [Fact]
+    public void AnEmptyBucketAnswersAsEmpty()
+    {
+        WorldMap map = New();
+
+        map.Add(new Vec3(0, 0, -1), 1000);
+
+        Assert.Empty(map.CellsInBucket(0));
+        Assert.Empty(map.CellsInBucket(Buckets - 1));
+
+        // The same empty answer every time, which is what "allocates nothing" means here.
+        Assert.Same(map.CellsInBucket(0), map.CellsInBucket(1));
+    }
+
+    /// <summary>
+    /// Moving a reading out of a bucket must remove it from that bucket's cells, not merely add it to
+    /// another. Without this the old cube stays stamped in the bucket it left and the map shows the same
+    /// reading at two distances.
+    /// </summary>
+    [Fact]
+    public void AReadingThatMovesBucketsIsNoLongerInBucketItLeft()
+    {
+        WorldMap map = New();
+
+        int leaving = BucketOf(1000);
+        int entering = BucketOf(3000);
+
+        map.Add(new Vec3(0, 0, -1), 1000);
+        Assert.NotEmpty(map.CellsInBucket(leaving));
+
+        map.Add(new Vec3(0, 0, -2), 3000);
+
+        Assert.Empty(map.CellsInBucket(leaving));
+        Assert.NotEmpty(map.CellsInBucket(entering));
+    }
+
     /// <summary>
     /// The key packing WorldMap documents: (az + 180) * 181 + (el + 90). Written here rather than
     /// read from the implementation so the tests assert the documented convention instead of
@@ -207,4 +417,12 @@ public class WorldMapTests
     /// </summary>
     private static int Key(int azimuthDegrees, int elevationDegrees) =>
         (azimuthDegrees + 180) * 181 + elevationDegrees + 90;
+
+    /// <summary>
+    /// The bucket index a distance produces, computed the way WorldMap documents rather than read back
+    /// from it, so the dirty-bucket assertions name buckets by meaning instead of by whatever the code
+    /// happened to return. Same clamp, same rounding, same (Buckets - 1) span.
+    /// </summary>
+    private static int BucketOf(int mm) =>
+        (int)Math.Round(Math.Clamp((double)mm / MaxMm, 0, 1) * (Buckets - 1));
 }
