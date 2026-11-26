@@ -51,6 +51,12 @@ namespace EchoEnvironment
         private readonly MatrixTransform3D _orientation = new(Matrix3D.Identity);
 
         /// <summary>
+        /// The fixed mounting rotation of the DOF sensor (Core's Mat3), composed ahead of the live IMU
+        /// orientation in SetOrientation. Identity unless --mount configured it, so the default is unchanged.
+        /// </summary>
+        private readonly Mat3 _mount = Mat3.Identity;
+
+        /// <summary>
         /// Phase 6b: the orientation *matrix* is filtered here, on the UI thread, because the transform the
         /// scene rotates by is a WPF object and the filter's output has to reach it. The angles the readout
         /// prints are derived from the same Mat3 by MainViewModel, which never sees a Matrix3D.
@@ -105,6 +111,10 @@ namespace EchoEnvironment
         {
             ArgumentNullException.ThrowIfNull(source);
             _viewModel = new MainViewModel(source);
+
+            // The fixed DOF-sensor mounting offset, configured at launch via --mount. Precomputed to a
+            // matrix once; SetOrientation composes it with the live IMU orientation on every frame.
+            _mount = source.Mount.ToMatrix();
 
             InitializeComponent();
 
@@ -390,7 +400,10 @@ namespace EchoEnvironment
         /// </summary>
         private void SetOrientation(Mat3 rotation)
         {
-            _orientation.Matrix = rotation.ToMatrix3D();
+            // Compose the fixed mounting offset with the live IMU orientation. Row-vector convention:
+            // p * (M_mount * M_imu) applies the mount first, then the IMU. _mount is identity unless
+            // --mount was given, so the default path is byte-for-byte what it was before this line existed.
+            _orientation.Matrix = (_mount * rotation).ToMatrix3D();
         }
 
         private static TimeSpan RenderInterval(int hz) => TimeSpan.FromSeconds(1.0 / hz);

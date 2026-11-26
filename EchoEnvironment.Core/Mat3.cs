@@ -42,6 +42,9 @@ public readonly struct Mat3
     public double M32 { get; }
     public double M33 { get; }
 
+    /// <summary>The rotation that changes nothing: composing any matrix with this returns the other one.</summary>
+    public static readonly Mat3 Identity = new(1, 0, 0, 0, 1, 0, 0, 0, 1);
+
     /// <summary>
     /// Builds the sensor-to-world rotation whose columns are the three world axes expressed in
     /// sensor coordinates - which makes its rows the sensor axes expressed in world coordinates.
@@ -55,4 +58,23 @@ public readonly struct Mat3
         new(east.X, up.X, -north.X,
             east.Y, up.Y, -north.Y,
             east.Z, up.Z, -north.Z);
+
+    /// <summary>
+    /// Row-vector composition: (a * b) is the matrix such that v * (a * b) == (v * a) * b. This is
+    /// the order SensorMountOrientation relies on to compose a fixed mount with the live IMU matrix
+    /// as p * (M_mount * M_imu). Result element (i,j) is the dot of row i of a with column j of b.
+    /// </summary>
+    public static Mat3 operator *(in Mat3 a, in Mat3 b) =>
+        new(
+            a.M11 * b.M11 + a.M12 * b.M21 + a.M13 * b.M31,
+            a.M11 * b.M12 + a.M12 * b.M22 + a.M13 * b.M32,
+            a.M11 * b.M13 + a.M12 * b.M23 + a.M13 * b.M33,
+
+            a.M21 * b.M11 + a.M22 * b.M21 + a.M23 * b.M31,
+            a.M21 * b.M12 + a.M22 * b.M22 + a.M23 * b.M32,
+            a.M21 * b.M13 + a.M22 * b.M23 + a.M23 * b.M33,
+
+            a.M31 * b.M11 + a.M32 * b.M21 + a.M33 * b.M31,
+            a.M31 * b.M12 + a.M32 * b.M22 + a.M33 * b.M32,
+            a.M31 * b.M13 + a.M32 * b.M23 + a.M33 * b.M33);
 }

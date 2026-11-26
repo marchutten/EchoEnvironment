@@ -1,4 +1,6 @@
-﻿using System.IO;
+﻿using System.Globalization;
+using System.IO;
+using EchoEnvironment.Core;
 using EchoEnvironment.Hardware;
 
 namespace EchoEnvironment;
@@ -36,6 +38,16 @@ public enum SensorSourceKind
 /// </summary>
 public sealed record SensorSource(SensorSourceKind Kind, string? ReplayPath)
 {
+    /// <summary>
+    /// The fixed mounting orientation of the DOF sensor, configured at launch via --mount. Defaults to
+    /// <see cref="SensorMountOrientation.Identity"/>, which composes to exactly today's behavior: a source
+    /// built without a mount (every existing factory and test) is unchanged. It rides on the source rather
+    /// than being a new constructor parameter because MainWindow's single-constructor contract is pinned by
+    /// a test, and the mount is a property of how the device is set up - which is exactly what this record
+    /// already models.
+    /// </summary>
+    public SensorMountOrientation Mount { get; init; } = SensorMountOrientation.Identity;
+
     public static SensorSource Serial() => new(SensorSourceKind.Serial, null);
 
     public static SensorSource Simulated() => new(SensorSourceKind.Simulated, null);
@@ -76,7 +88,7 @@ public static class AppLaunchOptions
 {
     /// <summary>Printed on every rejection, because every rejection is a mistyped command line.</summary>
     public const string Usage =
-        "Usage: EchoEnvironment [--sim] [--replay <file>]   (no arguments: connect to a serial port)";
+        "Usage: EchoEnvironment [--sim] [--replay <file>] [--mount <yaw,pitch,roll>]   (no arguments: connect to a serial port)";
 
     /// <summary>
     /// Turns the command line into one <see cref="SensorSource"/>, or into a message that says what was
@@ -91,6 +103,7 @@ public static class AppLaunchOptions
 
         SensorSourceKind? chosen = null;
         string? replayPath = null;
+        SensorMountOrientation mount = SensorMountOrientation.Identity;
 
         // A null array is what a caller with no arguments at all produces; treating it as "no arguments"
         // rather than as a fault keeps the default path - the serial one - the least surprising.
@@ -150,6 +163,25 @@ public static class AppLaunchOptions
                     chosen = SensorSourceKind.Replay;
                     break;
 
+                case "--mount":
+                    // The mount is independent of which source is chosen - a simulator, a replay, or a live
+                    // port can all be mounted at an angle - so unlike --sim/--replay it does not participate
+                    // in the "only one source" rule and may appear alongside either.
+                    if (i + 1 >= commandLine.Length)
+                    {
+                        error = $"--mount needs three comma-separated degrees: --mount <yaw,pitch,roll>. {Usage}";
+                        return false;
+                    }
+
+                    if (!TryParseMount(commandLine[++i], out SensorMountOrientation parsed, out string? mountError))
+                    {
+                        error = $"{mountError} {Usage}";
+                        return false;
+                    }
+
+                    mount = parsed;
+                    break;
+
                 default:
                     error = $"Unrecognised argument: {argument}. {Usage}";
                     return false;
@@ -163,6 +195,44 @@ public static class AppLaunchOptions
             _ => SensorSource.Serial(),
         };
 
+        // Applied after the source is built so a mount can be combined with any source. An identity mount
+        // leaves the record equal to its default, so a launch without --mount produces an identical source.
+        if (!mount.IsIdentity)
+        {
+            source = source with { Mount = mount };
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Parses "yaw,pitch,roll" in degrees. Rejects a wrong field count or any non-numeric field rather than
+    /// defaulting it: a half-parsed orientation would silently rotate the map by an amount the user did not
+    /// ask for, which is the same class of failure the rest of this parser refuses to tolerate.
+    /// </summary>
+    private static bool TryParseMount(string value, out SensorMountOrientation mount, out string? error)
+    {
+        mount = SensorMountOrientation.Identity;
+        error = null;
+
+        string[] parts = value.Split(',');
+        if (parts.Length != 3)
+        {
+            error = $"--mount needs exactly three comma-separated degrees (yaw,pitch,roll), got \"{value}\".";
+            return false;
+        }
+
+        double[] angles = new double[3];
+        for (int i = 0; i < 3; i++)
+        {
+            if (!double.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out angles[i]))
+            {
+                error = $"--mount: \"{parts[i]}\" is not a number of degrees.";
+                return false;
+            }
+        }
+
+        mount = new SensorMountOrientation(angles[0], angles[1], angles[2]);
         return true;
     }
 
