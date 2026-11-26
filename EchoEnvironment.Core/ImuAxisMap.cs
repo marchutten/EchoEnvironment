@@ -7,7 +7,8 @@ namespace EchoEnvironment.Core;
 /// Measured on the board (COM14 pose capture): chip +Z = up (level board reads ~1 g on accel Z),
 /// chip +X = look direction (tilting the front up raises accel X), chip +Y = left (rolling right
 /// raises accel Y). The sensor frame is X right, Y up, looking along -Z.
-/// Mapping (right-handed): sensorX = -imuY, sensorY = imuZ, sensorZ = -imuX.
+/// The VL53L5CX looks perpendicular to the board; verified on hardware that a flat board must look up.
+/// Mapping (right-handed): sensorX = -imuY, sensorY = imuX, sensorZ = imuZ.
 /// The same mapping is applied to gyro, accel and mag so the three stay consistent.
 /// </summary>
 public static class ImuAxisMap
@@ -20,8 +21,8 @@ public static class ImuAxisMap
             int y = imu[i + 1];
             int z = imu[i + 2];
             sensor[i] = -y;
-            sensor[i + 1] = z;
-            sensor[i + 2] = -x;
+            sensor[i + 1] = x;
+            sensor[i + 2] = z;
         }
     }
 }

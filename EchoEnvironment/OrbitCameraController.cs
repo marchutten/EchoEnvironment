@@ -156,7 +156,7 @@ public sealed class OrbitCameraController
         var group = new Transform3DGroup();
         if (remapModel)
         {
-            group.Children.Add(new MatrixTransform3D(new Matrix3D(0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1)));
+            group.Children.Add(new MatrixTransform3D(new Matrix3D(0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)));
         }
         else
         {

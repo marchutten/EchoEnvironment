@@ -1,4 +1,4 @@
-﻿using System.Windows.Controls;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
@@ -185,13 +185,14 @@ public class ZoneRendererTests
                         Assert.True(translate.OffsetX > 0, $"row {row} col {col}: right half must have positive X.");
                     }
 
+                    // Lower rows face board +X = sensor +Y (verified on hardware).
                     if (row < size / 2)
                     {
-                        Assert.True(translate.OffsetY > 0, $"row {row} col {col}: top half must have positive Y.");
+                        Assert.True(translate.OffsetY < 0, $"row {row} col {col}: top half must have negative Y.");
                     }
                     else
                     {
-                        Assert.True(translate.OffsetY < 0, $"row {row} col {col}: bottom half must have negative Y.");
+                        Assert.True(translate.OffsetY > 0, $"row {row} col {col}: bottom half must have positive Y.");
                     }
                 }
             }

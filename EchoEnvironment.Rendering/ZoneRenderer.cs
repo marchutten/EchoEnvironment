@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
@@ -180,7 +180,8 @@ public sealed class ZoneRenderer
                 }
 
                 double az = (col - (size - 1) / 2.0) * step * Math.PI / 180.0;
-                double el = ((size - 1) / 2.0 - row) * step * Math.PI / 180.0;
+                // Lower rows of the zone matrix face board +X (sensor +Y, see ImuAxisMap), verified on hardware.
+                double el = (row - (size - 1) / 2.0) * step * Math.PI / 180.0;
 
                 // Sensor looks along -Z; X is right, Y is up.
                 double r = mm * SceneUnitsPerMm;
