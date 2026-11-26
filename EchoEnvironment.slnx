@@ -1,9 +1,5 @@
 <Solution>
-  <Folder Name="/Solution/">
-    <File Path="docs/baseline/pre-phase5-connected.png" />
-    <File Path="docs/baseline/post-phase5d-connected.png" />
-    <File Path="MIGRATION_PLAN.md" />
-  </Folder>
+  <Folder Name="/Solution/" />
   <Project Path="EchoEnvironment.Core/EchoEnvironment.Core.csproj" />
   <Project Path="EchoEnvironment.Hardware/EchoEnvironment.Hardware.csproj" />
   <Project Path="EchoEnvironment.Rendering/EchoEnvironment.Rendering.csproj" />
