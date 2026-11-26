@@ -1,4 +1,4 @@
-﻿using System.Windows.Media;
+using System.Windows.Media;
 using System.Windows.Media.Media3D;
 
 namespace EchoEnvironment.Rendering;
@@ -151,9 +151,18 @@ public static class MeshFactory
 
     public static GeometryModel3D CreateReferenceSphere(double radius)
     {
+        var mesh = CreateSphereMesh(radius, 12, 24);
+
+        var brush = new SolidColorBrush(Color.FromArgb(28, 120, 160, 255));
+        var material = new DiffuseMaterial(brush);
+        var model = new GeometryModel3D(mesh, material) { BackMaterial = material };
+        model.Freeze();
+        return model;
+    }
+
+    public static MeshGeometry3D CreateSphereMesh(double radius, int rings, int segments)
+    {
         var mesh = new MeshGeometry3D();
-        const int rings = 12;
-        const int segments = 24;
 
         for (int i = 0; i <= rings; i++)
         {
@@ -190,10 +199,7 @@ public static class MeshFactory
             }
         }
 
-        var brush = new SolidColorBrush(Color.FromArgb(28, 120, 160, 255));
-        var material = new DiffuseMaterial(brush);
-        var model = new GeometryModel3D(mesh, material) { BackMaterial = material };
-        model.Freeze();
-        return model;
+        mesh.Freeze();
+        return mesh;
     }
 }

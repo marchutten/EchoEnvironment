@@ -51,8 +51,9 @@ public sealed class ImuChart : FrameworkElement
         InvalidateVisual();
     }
 
-    protected override void OnRender(DrawingContext dc)
+    protected override void OnRender(DrawingContext drawingContext)
     {
+        DrawingContext dc = drawingContext;
         double width = ActualWidth;
         double height = ActualHeight;
         dc.DrawRectangle(Background, null, new Rect(0, 0, width, height));

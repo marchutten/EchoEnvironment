@@ -64,6 +64,11 @@ public sealed class ZoneRenderer
     private readonly UniformGrid _heatGrid;
     private readonly GeometryModel3D _lineModel;
     private readonly MeshGeometry3D _cubeMesh;
+
+    /// <summary>Radius of a live zone dot in the main view, in scene units.</summary>
+    private const double ZoneDotRadius = 0.006;
+
+    private readonly MeshGeometry3D _zoneMesh = MeshFactory.CreateSphereMesh(ZoneDotRadius, 6, 10);
     private readonly List<GeometryModel3D> _zoneModels = [];
 
     /// <summary>
@@ -279,7 +284,7 @@ public sealed class ZoneRenderer
         for (int i = 0; i < count; i++)
         {
             var material = new DiffuseMaterial(Brushes.White);
-            var model = new GeometryModel3D(_cubeMesh, material) { BackMaterial = material };
+            var model = new GeometryModel3D(_zoneMesh, material) { BackMaterial = material };
             _zoneModels.Add(model);
 
             // One transform per zone, created here and mutated by UpdateFrame for the rest of the

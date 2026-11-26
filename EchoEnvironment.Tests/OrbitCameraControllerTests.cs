@@ -82,7 +82,6 @@ public class OrbitCameraControllerTests
     /// </summary>
     private static readonly Vec3 Down = new(0, -1, 0);
 
-    private static readonly Vec3 West = new(-1, 0, 0);
 
     /// <summary>
     /// The transform the board viewport puts on _boardGroup: MainWindow passes remapModel: true with the
