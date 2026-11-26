@@ -20,10 +20,10 @@
 /// behavior exactly - a mount that is not configured changes nothing. Every non-identity value is a
 /// deliberate opt-in.
 ///
-/// ANGLE ORDER. <see cref="ToMatrix"/> composes as R_yaw(Y) * R_pitch(X) * R_roll(Z) in the row-vector
-/// sense, so yaw is applied to the point first and roll last. The exact physical sign of each axis
-/// depends on how the sensor is bolted down and is intentionally pinned by tests rather than asserted
-/// here; what matters for correctness is that the composition is fixed, documented, and reversible.
+/// ANGLE ORDER. <see cref="ToMatrix"/> composes as R_roll(X) * R_pitch(Y) * R_yaw(Z) in the row-vector
+/// sense - a body-frame (intrinsic) XYZ sequence: roll about the sensor's own X first, then pitch about
+/// its new Y, then yaw about its newest Z. Each angle is right-handed about its named body axis, matching
+/// the standard positive-angle convention; the mapping is pinned by SensorMountOrientationTests.
 /// </summary>
 public readonly record struct SensorMountOrientation
 {
@@ -37,13 +37,13 @@ public readonly record struct SensorMountOrientation
         RollDegrees = rollDegrees;
     }
 
-    /// <summary>Rotation about the world up axis (Y). Positive turns south toward east.</summary>
+    /// <summary>Rotation about the body Z axis (up). Positive turns X toward Y by the right-hand rule.</summary>
     public double YawDegrees { get; }
 
-    /// <summary>Rotation about the world east axis (X).</summary>
+    /// <summary>Rotation about the body Y axis. Positive turns Z toward X by the right-hand rule.</summary>
     public double PitchDegrees { get; }
 
-    /// <summary>Rotation about the sensor look axis (Z).</summary>
+    /// <summary>Rotation about the body X axis (forward). Positive turns Y toward Z by the right-hand rule.</summary>
     public double RollDegrees { get; }
 
     /// <summary>True when all three angles are zero, i.e. no offset at all.</summary>
@@ -55,12 +55,15 @@ public readonly record struct SensorMountOrientation
     /// </summary>
     public Mat3 ToMatrix()
     {
-        Mat3 yaw = RotationY(YawDegrees);
-        Mat3 pitch = RotationX(PitchDegrees);
-        Mat3 roll = RotationZ(RollDegrees);
+        Mat3 roll = RotationX(RollDegrees);
+        Mat3 pitch = RotationY(PitchDegrees);
+        Mat3 yaw = RotationZ(YawDegrees);
 
-        // Row-vector composition: yaw applied first, roll last. See the class comment.
-        return yaw * pitch * roll;
+        // Body-frame (intrinsic) composition in the row-vector sense: roll about the sensor's own X
+        // applied first, then pitch about its new Y, then yaw about its newest Z. Post-multiplying by
+        // each elementary rotation applies it in the current body frame, so this is an intrinsic XYZ
+        // sequence matching the standard positive-angle convention (roll=X, pitch=Y, yaw=Z).
+        return roll * pitch * yaw;
     }
 
     // Elementary rotations in the row-vector convention (v' = v * R), i.e. the transpose of the usual

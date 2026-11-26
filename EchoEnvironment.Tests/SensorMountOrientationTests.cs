@@ -5,9 +5,9 @@ namespace EchoEnvironment.Tests;
 
 /// <summary>
 /// Pins the math of <see cref="SensorMountOrientation"/>: identity is a true no-op, each single-axis
-/// rotation produces the expected row-vector matrix, and the yaw*pitch*roll composition applies in the
-/// documented order. These tests pin the MATH, not a physical ground truth - which way a positive yaw
-/// physically turns the sensor depends on the mount and is intentionally left to configuration.
+/// rotation produces the expected body-frame matrix (roll about X, pitch about Y, yaw about Z), and the
+/// roll*pitch*yaw intrinsic composition applies in the documented order. These tests pin the MATH; the
+/// physical mounting that maps sensor axes onto body axes is configured via --mount.
 /// </summary>
 public class SensorMountOrientationTests
 {
@@ -37,40 +37,39 @@ public class SensorMountOrientationTests
     }
 
     [Fact]
-    public void Yaw90_IsARotationAboutUp_AboutTheExpectedSign()
+    public void Yaw90_IsARotationAboutBodyZ()
     {
-        // Row-vector R_y(90): cos=0, sin=1 -> M13=-1, M31=+1, M22 stays 1.
+        // Body-frame yaw = R_z(90): M11=cos=0, M12=sin=1, M21=-sin=-1, M33 stays 1.
         Mat3 m = new SensorMountOrientation(90, 0, 0).ToMatrix();
-
-        Assert.Equal(0, m.M11, Tol);
-        Assert.Equal(-1, m.M13, Tol);
-        Assert.Equal(1, m.M22, Tol);
-        Assert.Equal(1, m.M31, Tol);
-        Assert.Equal(0, m.M33, Tol);
-    }
-
-    [Fact]
-    public void Pitch90_IsARotationAboutEast()
-    {
-        // Row-vector R_x(90): M22=cos=0, M23=sin=1, M32=-sin=-1, M11 stays 1.
-        Mat3 m = new SensorMountOrientation(0, 90, 0).ToMatrix();
-
-        Assert.Equal(1, m.M11, Tol);
-        Assert.Equal(0, m.M22, Tol);
-        Assert.Equal(1, m.M23, Tol);
-        Assert.Equal(-1, m.M32, Tol);
-    }
-
-    [Fact]
-    public void Roll90_IsARotationAboutLookAxis()
-    {
-        // Row-vector R_z(90): M11=cos=0, M12=sin=1, M21=-sin=-1, M33 stays 1.
-        Mat3 m = new SensorMountOrientation(0, 0, 90).ToMatrix();
 
         Assert.Equal(0, m.M11, Tol);
         Assert.Equal(1, m.M12, Tol);
         Assert.Equal(-1, m.M21, Tol);
         Assert.Equal(1, m.M33, Tol);
+    }
+
+    [Fact]
+    public void Pitch90_IsARotationAboutBodyY()
+    {
+        // Body-frame pitch = R_y(90): M11=cos=0, M13=-sin=-1, M22 stays 1, M31=sin=1.
+        Mat3 m = new SensorMountOrientation(0, 90, 0).ToMatrix();
+
+        Assert.Equal(0, m.M11, Tol);
+        Assert.Equal(-1, m.M13, Tol);
+        Assert.Equal(1, m.M22, Tol);
+        Assert.Equal(1, m.M31, Tol);
+    }
+
+    [Fact]
+    public void Roll90_IsARotationAboutBodyX()
+    {
+        // Body-frame roll = R_x(90): M11 stays 1, M22=cos=0, M23=sin=1, M32=-sin=-1.
+        Mat3 m = new SensorMountOrientation(0, 0, 90).ToMatrix();
+
+        Assert.Equal(1, m.M11, Tol);
+        Assert.Equal(0, m.M22, Tol);
+        Assert.Equal(1, m.M23, Tol);
+        Assert.Equal(-1, m.M32, Tol);
     }
 
     [Fact]
