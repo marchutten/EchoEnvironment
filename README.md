@@ -1,4 +1,4 @@
-﻿# EchoEnvironment
+# EchoEnvironment
 
 A WPF visualiser for a VL53L5CX time-of-flight zone sensor with a 9-DOF IMU: 16 or 64 zone
 distances drawn as a fan of cubes in 3D, a heat grid on the right panel, an optional accumulated

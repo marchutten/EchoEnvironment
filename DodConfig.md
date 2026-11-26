@@ -1,7 +1,8 @@
 ﻿# Plan: Configurable DOF Sensor Orientation
 > **Status (implemented):** P1, P3, P4 done; P2/P4 carried on `SensorSource` instead of `MainViewModel`
 > (see §4 deviations); P5 optional UI not done. Build clean, **354 tests green** (8 new). The §6.3
-> end-to-end `WorldMap` characterization test and the §7 physical axis/sign confirmation are still open.
+> end-to-end `WorldMap` characterization test is still open. The §7 board-face / gizmo axis question is
+> **resolved**: the board slab is now thin on Z so its face normal is the optical axis (see §7).
 
 ## 1. Goal
 
@@ -163,6 +164,15 @@ the additive Core type (P1).
   instead becomes "rotate the whole scene" — confirm the physical setup.
 - **`WorldMap` azimuth convention.** `Add` uses `atan2(X, -Z)` (north-referenced). A mount that
   changes heading shifts azimuth; ensure the test expectation accounts for the north reference.
+- **RESOLVED — on-board gizmo / board-face axis.** The board slab was thin on model Y, so its face
+  normal was Y while the sensor's documented look axis is Z (`WorldFrame.SensorLookAxis = (0,0,-1)`) —
+  the two disagreed, which is why "Y pointed out of the board". A VL53L5CX looks perpendicular to its
+  board, so the face normal must be the optical axis. Fix: `MeshFactory.CreateBoardModel()` is now thin
+  on **Z** (`0.4 × 0.25 × 0.03`), making the arm perpendicular to the face the **Z** arm. This is a
+  rendering-only change: `SensorLookAxis`, `Mat3.CreateOrientation` and `WorldMap` azimuth are untouched,
+  so the point-cloud projection is unchanged. The board-view remap in `CreateViewTransform` was left as
+  is; the repinned test `BoardSlabIsThinAlongTheOpticalAxis_AndTheRemapTurnsThatNormalSidewaysInView`
+  pins the new extents and axis mapping. Full suite green (354).
 
 ---
 

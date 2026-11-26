@@ -1,5 +1,8 @@
 <Solution>
-  <Folder Name="/Solution/" />
+  <Folder Name="/Solution/">
+    <File Path="DodConfig.md" />
+    <File Path="README.md" />
+  </Folder>
   <Project Path="EchoEnvironment.Core/EchoEnvironment.Core.csproj" />
   <Project Path="EchoEnvironment.Hardware/EchoEnvironment.Hardware.csproj" />
   <Project Path="EchoEnvironment.Rendering/EchoEnvironment.Rendering.csproj" />

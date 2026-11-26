@@ -250,9 +250,16 @@ public class OrbitCameraControllerTests
     /// <summary>
     /// THE OTHER HALF OF §12.1's BOARD VIEW ROW: the green slab itself, not just the gizmo's letters.
     ///
-    /// §12.1's row says "Green board plane". Measured, the slab is 0.400 x 0.030 x 0.250 in MODEL space —
-    /// thin along model Y, so its face normal is world up — and the board viewport's remap moves that normal
-    /// to viewport +X. The slab's two in-plane extents land on viewport Z (0.400) and viewport Y (0.250).
+    /// §12.1's row says "Green board plane". Measured, the slab is 0.400 x 0.250 x 0.030 in MODEL space —
+    /// thin along model Z, so its face normal is the optical axis (WorldFrame.SensorLookAxis) — and the board
+    /// viewport's remap moves that normal to viewport -Y. The slab's two in-plane extents land on viewport Z
+    /// (0.400) and viewport X (0.250).
+    ///
+    /// WHY THE SLAB IS THIN ON Z AND NOT ON Y. A VL53L5CX looks perpendicular to the board it is mounted on,
+    /// so the board's face normal must be the optical axis. The slab used to be thin on model Y, which made
+    /// the Y arm poke out of the board face while the sensor was documented to look along Z — a gizmo whose
+    /// normal axis (Y) contradicted its look axis (Z). Making the slab thin on Z makes the arm perpendicular
+    /// to the face the Z arm, which is what reads as "out of the front face".
     ///
     /// WHY THAT MATTERS FOR A SCREENSHOT EXPECTATION. The BoardViewport camera sits at (0.9, 0.7, 1.3)
     /// looking at the origin, so its line of sight is dominated by the Z and Y directions and is close to
@@ -266,7 +273,7 @@ public class OrbitCameraControllerTests
     /// extents are read off the mesh corners, and the axis mapping is read off the composed matrix.
     /// </summary>
     [Fact]
-    public void BoardSlabIsThinAlongWorldUp_AndTheRemapTurnsThatNormalSidewaysInView()
+    public void BoardSlabIsThinAlongTheOpticalAxis_AndTheRemapTurnsThatNormalSidewaysInView()
     {
         StaRunner.Run(() =>
         {
@@ -281,22 +288,23 @@ public class OrbitCameraControllerTests
             double extentY = Extent(mesh, p => p.Y);
             double extentZ = Extent(mesh, p => p.Z);
 
-            // The slab as built: wide along X, shallow along Z, thin along Y. Its face normal is model Y.
+            // The slab as built: wide along X, deep along Y, thin along Z. Its face normal is model Z, the
+            // optical axis, so the arm perpendicular to the board face is the Z arm.
             AssertMath.Close(0.400, extentX, Tolerance, "board slab: model X extent");
-            AssertMath.Close(0.030, extentY, Tolerance, "board slab: model Y extent (the thin one, i.e. the face normal)");
-            AssertMath.Close(0.250, extentZ, Tolerance, "board slab: model Z extent");
+            AssertMath.Close(0.250, extentY, Tolerance, "board slab: model Y extent");
+            AssertMath.Close(0.030, extentZ, Tolerance, "board slab: model Z extent (the thin one, i.e. the face normal)");
 
             Matrix3D view = BoardViewTransform();
 
             // Where each model axis ends up in the viewport, so the slab's viewport extents follow.
-            AssertDirection("slab normal", AssertMath.Transform(view, WorldFrame.Up), WorldFrame.East, "face normal -> viewport +X (sideways)");
+            AssertDirection("slab normal", AssertMath.Transform(view, WorldFrame.South), Down, "face normal -> viewport -Y (sideways)");
             AssertDirection("slab width", AssertMath.Transform(view, WorldFrame.East), WorldFrame.North, "0.400 extent -> viewport Z");
-            AssertDirection("slab depth", AssertMath.Transform(view, WorldFrame.South), Down, "0.250 extent -> viewport Y");
+            AssertDirection("slab depth", AssertMath.Transform(view, WorldFrame.Up), WorldFrame.East, "0.250 extent -> viewport X");
 
-            // So in the viewport the slab is thin along X and broad along Y and Z: a face pointing sideways,
+            // So in the viewport the slab is thin along Y and broad along X and Z: a face pointing sideways,
             // which the camera at (0.9, 0.7, 1.3) sees strongly foreshortened.
             Vec3 cameraToOrigin = new Vec3(-0.9, -0.7, -1.3).Normalized();
-            Vec3 faceNormalInView = AssertMath.Transform(view, WorldFrame.Up);
+            Vec3 faceNormalInView = AssertMath.Transform(view, WorldFrame.South);
             double facing = Math.Abs(AssertMath.Dot(faceNormalInView, cameraToOrigin));
 
             // facing is |cos(angle between the face normal and the line of sight)|. Near 1 means the face

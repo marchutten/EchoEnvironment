@@ -91,8 +91,11 @@ public static class MeshFactory
 
     public static GeometryModel3D CreateBoardModel()
     {
-        // Sensor looks along -Z, so the front edge of the board is at -Z.
-        return CreateColoredBox(new Point3D(0, 0, 0), 0.4, 0.03, 0.25, Color.FromRgb(20, 110, 60));
+        // The board is thin on Z so its face normal is the optical axis: the sensor looks along Z
+        // (WorldFrame.SensorLookAxis), and the arm perpendicular to the board face is therefore the Z
+        // arm. Previously the board was thin on Y, which made the Y arm poke out of the face — a gizmo
+        // whose normal axis (Y) disagreed with its look axis (Z). The front edge is at +Z.
+        return CreateColoredBox(new Point3D(0, 0, 0), 0.4, 0.25, 0.03, Color.FromRgb(20, 110, 60));
     }
 
     // Horizontal raster at z = 0 (WPF Y = 0), fixed in the world so it stays visible at any zoom.
