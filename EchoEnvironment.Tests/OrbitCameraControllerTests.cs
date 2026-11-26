@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -55,9 +55,9 @@ public class OrbitCameraControllerTests
     /// be asserted independently of the group that assembles it.
     /// </summary>
     private static readonly Matrix3D ModelRemap = new(
-        1, 0, 0, 0,
         0, 0, 1, 0,
-        0, -1, 0, 0,
+        1, 0, 0, 0,
+        0, 1, 0, 0,
         0, 0, 0, 1);
 
     /// <summary>The 180° turn about X that the sensor viewport uses instead of the remap.</summary>
@@ -178,14 +178,14 @@ public class OrbitCameraControllerTests
         {
             Matrix3D view = BoardViewTransform();
 
-            // X arm (world east) -> viewport -Z: away from the camera, into the screen.
-            AssertDirection("X arm", AssertMath.Transform(view, WorldFrame.East), WorldFrame.North, "east -> north/away");
+            // X arm -> viewport +X: toward the right.
+            AssertDirection("X arm", AssertMath.Transform(view, WorldFrame.East), WorldFrame.East, "east -> east/right");
 
-            // Y arm (world up) -> viewport +X: toward the right.
-            AssertDirection("Y arm", AssertMath.Transform(view, WorldFrame.Up), WorldFrame.East, "up -> east/right");
+            // Y arm -> viewport -Z: away from the camera, into the screen.
+            AssertDirection("Y arm", AssertMath.Transform(view, WorldFrame.Up), WorldFrame.North, "up -> north/away");
 
-            // Z arm (world south, the arm 5d moved) -> viewport -Y: downward.
-            AssertDirection("Z arm", AssertMath.Transform(view, WorldFrame.South), Down, "south -> down");
+            // Z arm -> viewport +Y: upward.
+            AssertDirection("Z arm", AssertMath.Transform(view, WorldFrame.South), WorldFrame.Up, "south -> up");
         });
     }
 
@@ -201,9 +201,9 @@ public class OrbitCameraControllerTests
     {
         StaRunner.Run(() => AssertMath.Matrix(
             new Matrix3D(
-                 0, 0, -1, 0,
                  1, 0, 0, 0,
-                 0, -1, 0, 0,
+                 0, 0, -1, 0,
+                 0, 1, 0, 0,
                  0, 0, 0, 1),
             BoardViewTransform(),
             Tolerance,
@@ -297,9 +297,9 @@ public class OrbitCameraControllerTests
             Matrix3D view = BoardViewTransform();
 
             // Where each model axis ends up in the viewport, so the slab's viewport extents follow.
-            AssertDirection("slab normal", AssertMath.Transform(view, WorldFrame.South), Down, "face normal -> viewport -Y (sideways)");
-            AssertDirection("slab width", AssertMath.Transform(view, WorldFrame.East), WorldFrame.North, "0.400 extent -> viewport Z");
-            AssertDirection("slab depth", AssertMath.Transform(view, WorldFrame.Up), WorldFrame.East, "0.250 extent -> viewport X");
+            AssertDirection("slab normal", AssertMath.Transform(view, WorldFrame.South), WorldFrame.Up, "face normal -> viewport +Y");
+            AssertDirection("slab width", AssertMath.Transform(view, WorldFrame.East), WorldFrame.East, "0.400 extent -> viewport X");
+            AssertDirection("slab depth", AssertMath.Transform(view, WorldFrame.Up), WorldFrame.North, "0.250 extent -> viewport Z");
 
             // So in the viewport the slab is thin along Y and broad along X and Z: a face pointing sideways,
             // which the camera at (0.9, 0.7, 1.3) sees strongly foreshortened.
@@ -359,7 +359,7 @@ public class OrbitCameraControllerTests
             Vec3 boardUp = AssertMath.Transform(board, WorldFrame.Up);
             Vec3 sensorUp = AssertMath.Transform(sensor, WorldFrame.Up);
 
-            AssertDirection("board view up", boardUp, WorldFrame.East, "board view: world up -> east");
+            AssertDirection("board view up", boardUp, WorldFrame.North, "board view: world up -> north");
             AssertDirection("sensor view up", sensorUp, Down, "sensor view: world up -> down");
         });
     }
@@ -394,9 +394,9 @@ public class OrbitCameraControllerTests
             // do not. If the gizmo's arms agreed with the world directions too, the remap would have
             // silently disappeared.
             Matrix3D view = BoardViewTransform();
-            AssertDirection("gizmo X", AssertMath.Transform(view, WorldFrame.East), WorldFrame.North, "gizmo X moved off +X");
-            AssertDirection("gizmo Y", AssertMath.Transform(view, WorldFrame.Up), WorldFrame.East, "gizmo Y moved off +Y");
-            AssertDirection("gizmo Z", AssertMath.Transform(view, WorldFrame.South), Down, "gizmo Z moved off +Z");
+            AssertDirection("gizmo X", AssertMath.Transform(view, WorldFrame.East), WorldFrame.East, "gizmo X -> viewport +X");
+            AssertDirection("gizmo Y", AssertMath.Transform(view, WorldFrame.Up), WorldFrame.North, "gizmo Y moved off +Y");
+            AssertDirection("gizmo Z", AssertMath.Transform(view, WorldFrame.South), WorldFrame.Up, "gizmo Z moved off +Z");
         });
     }
 
