@@ -1,4 +1,4 @@
-﻿using EchoEnvironment.Core;
+using EchoEnvironment.Core;
 using Xunit;
 
 namespace EchoEnvironment.Tests;
@@ -42,7 +42,6 @@ namespace EchoEnvironment.Tests;
 public class OrientationFilterTests
 {
     private const double IdealAccelCounts = 500.0; // 1 g
-    private const double IdealMagCounts = 500.0;
     private const double PoseTolerance = 1e-9;
 
     /// <summary>
@@ -558,15 +557,15 @@ public class OrientationFilterTests
         Vec3 probe = g + Counts(500, 0, 0); // delta 500 > threshold 60 => must rotate if calibrated
 
         var filter = new OrientationFilter();
-        Mat3 m = filter.Update(PoseFrame(FlatFacingNorth, g), 0.1); // call 1: init only, no accumulation
+        filter.Update(PoseFrame(FlatFacingNorth, g), 0.1); // call 1: init only, no accumulation
 
-        // Calls 2..51 are the 50 accumulating samples. Inside the calibration branch omega is
+        // Calls 2..51
         // always zero, so with a constant pose the matrix must not move — including call 51, where
         // the probe gyro is fed but still only accumulated. If the window were counted in *calls*
         // it would have ended at call 50 and this assertion would fail at call 51.
         for (int call = 2; call <= 51; call++)
         {
-            m = filter.Update(PoseFrame(FlatFacingNorth, call == 51 ? probe : g), 0.1);
+            Mat3 m = filter.Update(PoseFrame(FlatFacingNorth, call == 51 ? probe : g), 0.1);
             AssertMath.Matrix(FlatFacingNorth.ExpectedMatrix, m, 1e-9, $"call {call} must not rotate (still calibrating)");
         }
 
@@ -581,13 +580,13 @@ public class OrientationFilterTests
     public void GyroIsCompletelyIgnoredDuringCalibration_RegardlessOfMagnitude()
     {
         var filter = new OrientationFilter();
-        Mat3 pose = filter.Update(PoseFrame(FlatFacingNorth, Counts(0, 0, 0)), 0.1);
+        filter.Update(PoseFrame(FlatFacingNorth, Counts(0, 0, 0)), 0.1);
 
         Vec3 violent = Counts(30000, -30000, 30000);
 
         for (int call = 2; call <= 51; call++)
         {
-            pose = filter.Update(PoseFrame(FlatFacingNorth, violent), 0.1);
+            Mat3 pose = filter.Update(PoseFrame(FlatFacingNorth, violent), 0.1);
             AssertMath.Matrix(FlatFacingNorth.ExpectedMatrix, pose, 1e-9, $"call {call} during calibration");
         }
     }
@@ -661,20 +660,20 @@ public class OrientationFilterTests
     }
 
     [Fact]
-    public void CorrectionTimeConstantBlendsAbout18PercentPerFrameAt100ms()
+    public void CorrectionTimeConstantBlendsAbout5PercentPerFrameAt100ms()
     {
-        // alpha = 1 - exp(-dt / 0.5). At dt = 0.1 that is 0.18127. With omega == 0 and a pose that
+        // alpha = 1 - exp(-dt / 2.0). At dt = 0.1 that is 0.04877. With omega == 0 and a pose that
         // differs from the current estimate by exactly one blend, the result must sit at that
-        // fraction. Proves CorrectionTimeConstantSeconds == 0.5 is the value actually in force.
+        // fraction. Proves CorrectionTimeConstantSeconds == 2.0 is the value actually in force.
         var filter = new OrientationFilter();
         Mat3 flat = filter.Update(PoseFrame(FlatFacingNorth, Counts(0, 0, 0)), 0.1); // initialized, no accumulation
 
         // Call 2 is still inside the calibration branch, so omega == 0 and only the blend acts.
         Mat3 blended = filter.Update(PoseFrame(TiltedUp345, Counts(0, 0, 0)), 0.1);
 
-        double alpha = 1 - Math.Exp(-0.1 / 0.5);
+        double alpha = 1 - Math.Exp(-0.1 / 2.0);
 
-        // _up starts at (0,1,0); measured up is (0, 0.8, -0.6). Blend then normalize.
+        // _up starts
         // Explicit Vec3 types are required: a target-typed `new(...)` has no type of its own, so it
         // cannot be the left operand of an operator.
         Vec3 expectedUp = new Vec3(0, 1, 0) * (1 - alpha) + new Vec3(0, 0.8, -0.6) * alpha;

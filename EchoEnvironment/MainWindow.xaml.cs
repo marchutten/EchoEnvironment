@@ -379,7 +379,9 @@ namespace EchoEnvironment
                 long now = System.Diagnostics.Stopwatch.GetTimestamp();
                 double dt = _lastImuTimestamp == 0 ? 0 : System.Diagnostics.Stopwatch.GetElapsedTime(_lastImuTimestamp, now).TotalSeconds;
                 _lastImuTimestamp = now;
-                SetOrientation(_imuFilter.Update(frame.Imu.Span, dt));
+                Span<int> imu = stackalloc int[9];
+                ImuAxisMap.ToSensorFrame(frame.Imu.Span, imu);
+                SetOrientation(_imuFilter.Update(imu, dt));
             }
 
             _zones.UpdateFrame(frame.Distances.Span, _viewModel.KeepMap);

@@ -1,4 +1,4 @@
-﻿namespace EchoEnvironment.Core;
+namespace EchoEnvironment.Core;
 
 /// <summary>
 /// Complementary filter for ITG3200 (gyro), BMA180 (accel) and HMC5883L (mag).
@@ -15,8 +15,11 @@ public sealed class OrientationFilter
     private const double GyroLsbPerDegreePerSecond = 14.375;
     private const int CalibrationSamples = 50;
     private const double StationaryThresholdCounts = 60;
+    private const double MaxRelativeMagnitudeDeviation = 0.15;
+    private const double MagnitudeReferenceRate = 0.02;
     private const double BiasAdaptationRate = 0.02;
-    private const double CorrectionTimeConstantSeconds = 0.5;
+    private const double CorrectionTimeConstantSeconds = 2.0;
+    private const double HeadingCorrectionTimeConstantSeconds = 5.0;
 
     private Vec3 _up = WorldFrame.Up;
     private Vec3 _east = WorldFrame.East;
@@ -25,6 +28,11 @@ public sealed class OrientationFilter
     private Vec3 _gyroBiasSum;
     private int _calibrationCount;
     private bool _initialized;
+    private double _accelReference;
+    private double _magReference;
+    private Vec3 _lastMag;
+    private int _magRepeatCount;
+    private const int FrozenMagRepeatLimit = 5;
 
     public Mat3 Current => Mat3.CreateOrientation(_east, _up, _north);
 
@@ -39,6 +47,8 @@ public sealed class OrientationFilter
     public void Reset()
     {
         _initialized = false;
+        _accelReference = 0;
+        _magReference = 0;
         _calibrationCount = 0;
         _gyroBiasSum = default;
         _gyroBias = default;
@@ -89,13 +99,51 @@ public sealed class OrientationFilter
             _up = upMeasured;
             _north = northMeasured;
             _east = eastMeasured;
+            _accelReference = accel.Length;
+            _magReference = mag.Length;
             _initialized = true;
             return Current;
         }
 
         dt = Math.Clamp(dt, 0, 0.5);
 
-        Vec3 omega = default;
+        Vec3 omega = AngularVelocity(gyro);
+
+        // A fixed world vector
+        _up -= Vec3.Cross(omega, _up) * dt;
+        _north -= Vec3.Cross(omega, _north) * dt;
+
+        // Reject accel (linear acceleration) and mag (local disturbance) samples whose magnitude
+        // departs from the running reference; trust the gyro alone for those frames.
+        bool accelTrusted = IsTrusted(accel.Length, ref _accelReference);
+        bool magTrusted = IsTrusted(mag.Length, ref _magReference) && !IsMagFrozen(mag);
+
+        double alpha = accelTrusted ? 1 - Math.Exp(-dt / CorrectionTimeConstantSeconds) : 0;
+        _up = (_up * (1 - alpha) + upMeasured * alpha).Normalized();
+
+        double headingAlpha = accelTrusted && magTrusted ? 1 - Math.Exp(-dt / HeadingCorrectionTimeConstantSeconds) : 0;
+        _north = (_north * (1 - headingAlpha) + northMeasured * headingAlpha).Normalized();
+
+        _east = Vec3.Cross(_north, _up).Normalized();
+        _north = Vec3.Cross(_up, _east);
+        return Current;
+    }
+
+    /// <summary>
+    /// A live HMC5883L always has a few counts of noise. Bit-identical readings over several frames
+    /// mean the firmware is resending a stale sample (seen on COM14: magSD = 0 while the board was
+    /// turned 90 and 180 degrees), so heading must come from the gyro alone.
+    /// </summary>
+    private bool IsMagFrozen(Vec3 mag)
+    {
+        bool same = mag.X == _lastMag.X && mag.Y == _lastMag.Y && mag.Z == _lastMag.Z;
+        _magRepeatCount = same ? _magRepeatCount + 1 : 0;
+        _lastMag = mag;
+        return _magRepeatCount >= FrozenMagRepeatLimit;
+    }
+
+    private Vec3 AngularVelocity(Vec3 gyro)
+    {
         if (_calibrationCount < CalibrationSamples)
         {
             _gyroBiasSum += gyro;
@@ -104,32 +152,31 @@ public sealed class OrientationFilter
             {
                 _gyroBias = _gyroBiasSum / CalibrationSamples;
             }
+
+            return default;
         }
-        else
+
+        Vec3 delta = gyro - _gyroBias;
+        if (delta.Length < StationaryThresholdCounts)
         {
-            double toRadians = Math.PI / 180.0 / GyroLsbPerDegreePerSecond;
-            Vec3 delta = gyro - _gyroBias;
-            if (delta.Length < StationaryThresholdCounts)
-            {
-                // Board is at rest: track the bias slowly and ignore noise.
-                _gyroBias += delta * BiasAdaptationRate;
-            }
-            else
-            {
-                omega = delta * toRadians;
-            }
+            // Board is at rest: track the bias slowly and ignore noise.
+            _gyroBias += delta * BiasAdaptationRate;
+            return default;
         }
 
-        // A fixed world vector seen from a body rotating with omega changes as dw/dt = -omega x w.
-        _up -= Vec3.Cross(omega, _up) * dt;
-        _north -= Vec3.Cross(omega, _north) * dt;
+        return delta * (Math.PI / 180.0 / GyroLsbPerDegreePerSecond);
+    }
 
-        double alpha = 1 - Math.Exp(-dt / CorrectionTimeConstantSeconds);
-        _up = (_up * (1 - alpha) + upMeasured * alpha).Normalized();
-        _north = (_north * (1 - alpha) + northMeasured * alpha).Normalized();
+    private static bool IsTrusted(double length, ref double reference)
+    {
+        if (reference <= 0)
+        {
+            reference = length;
+            return true;
+        }
 
-        _east = Vec3.Cross(_north, _up).Normalized();
-        _north = Vec3.Cross(_up, _east);
-        return Current;
+        bool trusted = Math.Abs(length / reference - 1) <= MaxRelativeMagnitudeDeviation;
+        reference += (length - reference) * MagnitudeReferenceRate;
+        return trusted;
     }
 }
