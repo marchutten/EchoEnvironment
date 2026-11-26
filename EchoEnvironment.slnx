@@ -1,6 +1,11 @@
 <Solution>
   <Folder Name="/Solution/">
+    <File Path=".editorconfig" />
+    <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
     <File Path="DodConfig.md" />
+    <File Path="Firmware.cpp" />
+    <File Path="global.json" />
     <File Path="README.md" />
   </Folder>
   <Project Path="EchoEnvironment.Core/EchoEnvironment.Core.csproj" />

@@ -382,6 +382,7 @@ namespace EchoEnvironment
                 Span<int> imu = stackalloc int[9];
                 ImuAxisMap.ToSensorFrame(frame.Imu.Span, imu);
                 SetOrientation(_imuFilter.Update(imu, dt));
+                ImuChartView.Add(frame.Imu.Span);
             }
 
             _zones.UpdateFrame(frame.Distances.Span, _viewModel.KeepMap);
